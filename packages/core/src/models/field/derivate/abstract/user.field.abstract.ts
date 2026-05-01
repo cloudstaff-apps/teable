@@ -1,19 +1,21 @@
 import { z } from 'zod';
-import { IdPrefix } from '../../../../utils';
 import type { CellValueType } from '../../constant';
 import { FieldCore } from '../../field';
 
 export const userCellValueSchema = z.object({
-  id: z.string().startsWith(IdPrefix.User),
+  id: z.string(),
   title: z.string(),
   email: z.string().optional(),
   avatarUrl: z.string().optional().nullable(),
+  isSystem: z.boolean().optional(),
 });
 
 export type IUserCellValue = z.infer<typeof userCellValueSchema>;
 
 export abstract class UserAbstractCore extends FieldCore {
   cellValueType!: CellValueType.String;
+
+  declare meta?: FieldCore['meta'];
 
   item2String(value: unknown) {
     if (value == null) {
@@ -37,7 +39,11 @@ export abstract class UserAbstractCore extends FieldCore {
 
   validateCellValue(cellValue: unknown) {
     if (this.isMultipleCellValue) {
-      return z.array(userCellValueSchema).nonempty().nullable().safeParse(cellValue);
+      return z
+        .array(userCellValueSchema)
+        .transform((arr) => (arr.length === 0 ? null : arr))
+        .nullable()
+        .safeParse(cellValue);
     }
     return userCellValueSchema.nullable().safeParse(cellValue);
   }

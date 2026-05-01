@@ -8,6 +8,9 @@ on:
       - 'apps/**'
       - 'packages/**'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,7 +18,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.9.0]
+        node-version: [22.18.0]
 
     steps:
       - uses: actions/checkout@v4

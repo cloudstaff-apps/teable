@@ -1,6 +1,6 @@
 {
   "name": "@teable/ui-lib",
-  "version": "1.3.2",
+  "version": "1.10.0",
   "license": "MIT",
   "homepage": "https://github.com/teableio/teable",
   "publishConfig": {
@@ -23,24 +23,38 @@
   "type": "module",
   "files": [
     "dist",
-    "tailwind.config.js",
-    "tailwind.shadcnui.config.js",
-    "ui.config.js",
+    "tailwind.config.cjs",
+    "tailwind.shadcnui.config.cjs",
+    "ui.config.cjs",
     "ui.config.d.ts"
   ],
-  "export": {
+  "exports": {
     ".": {
+      "@teable/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
     "./ui.config": {
-      "import": "./ui.config.js",
-      "require": "./ui.config.js",
+      "import": "./ui.config.cjs",
+      "require": "./ui.config.cjs",
       "types": "./ui.config.d.ts"
+    },
+    "./ui.config.cjs": {
+      "import": "./ui.config.cjs",
+      "require": "./ui.config.cjs"
+    },
+    "./global.shadcn.css": {
+      "import": "./dist/global.shadcn.css",
+      "require": "./dist/global.shadcn.css"
+    },
+    "./dist/global.shadcn.css": {
+      "import": "./dist/global.shadcn.css",
+      "require": "./dist/global.shadcn.css"
     }
   },
   "scripts": {
-    "build": "cross-env NODE_ENV=production tsc --build tsconfig.build.json",
+    "build": "cross-env NODE_ENV=production tsc --build tsconfig.build.json && cp src/shadcn/global.shadcn.css dist/",
     "build-react17jsx": "microbundle --tsconfig ./tsconfig.build.json --jsx jsx --jsxImportSource react --globals react/jsx-runtime=jsx --compress",
     "clean": "rimraf ./dist ./build ./tsconfig.tsbuildinfo ./tsconfig.build.tsbuildinfo ./node_modules/.cache ./.eslintcache",
     "dev": "microbundle watch --tsconfig ./tsconfig.build.json",
@@ -56,8 +70,8 @@
     "update-shadcn-ui": "node  ./scripts/update-shadcn-ui.mjs"
   },
   "peerDependencies": {
-    "@types/react": "^18.2.11",
-    "@types/react-dom": "^18.2.4",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -83,9 +97,9 @@
     "@tailwindcss/aspect-ratio": "0.4.2",
     "@teable/eslint-config-bases": "workspace:^",
     "@testing-library/react": "14.2.2",
-    "@types/node": "20.9.0",
-    "@types/react": "18.2.69",
-    "@types/react-dom": "18.2.22",
+    "@types/node": "22.18.0",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
     "autoprefixer": "10.4.19",
     "core-js": "3.36.1",
     "cross-env": "7.0.3",
@@ -95,8 +109,8 @@
     "postcss": "8.4.38",
     "postcss-flexbugs-fixes": "5.0.2",
     "prettier": "3.2.5",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "require-from-string": "2.0.2",
     "rimraf": "5.0.5",
     "shadcn-ui": "0.8.0",
@@ -111,6 +125,9 @@
     "@dnd-kit/core": "6.1.0",
     "@dnd-kit/sortable": "8.0.0",
     "@dnd-kit/utilities": "3.2.2",
+    "@glideapps/glide-data-grid": "6.0.3",
+    "@headless-tree/core": "1.5.1",
+    "@headless-tree/react": "1.5.1",
     "@radix-ui/react-accordion": "^1.1.2",
     "@radix-ui/react-alert-dialog": "1.0.5",
     "@radix-ui/react-avatar": "1.0.4",
@@ -128,6 +145,7 @@
     "@radix-ui/react-scroll-area": "1.0.5",
     "@radix-ui/react-select": "2.0.0",
     "@radix-ui/react-separator": "1.0.3",
+    "@radix-ui/react-slider": "1.2.2",
     "@radix-ui/react-slot": "1.0.2",
     "@radix-ui/react-switch": "1.0.3",
     "@radix-ui/react-tabs": "1.0.4",
@@ -136,20 +154,26 @@
     "@radix-ui/react-toggle-group": "1.1.0",
     "@radix-ui/react-tooltip": "1.0.7",
     "@teable/icons": "workspace:^",
-    "@teable/next-themes": "0.3.3",
+    "@teable/next-themes": "0.3.5",
     "class-variance-authority": "0.7.0",
+    "lucide-react": "0.363.0",
     "clsx": "2.1.0",
     "cmdk": "1.0.0",
-    "date-fns": "2.30.0",
+    "date-fns": "4.1.0",
     "deepmerge": "4.3.1",
+    "docx-preview": "0.3.2",
     "embla-carousel-react": "8.0.0",
-    "react-day-picker": "8.10.0",
+    "input-otp": "1.4.1",
+    "marked": "14.1.3",
+    "react-day-picker": "9.5.1",
     "react-hook-form": "7.51.1",
     "react-resizable-panels": "2.0.16",
+    "react-responsive-carousel": "3.2.23",
     "recharts": "2.12.3",
-    "sonner": "1.4.41",
+    "sonner": "1.7.3",
     "tailwind-merge": "2.2.2",
     "tailwindcss-animate": "1.0.7",
-    "zod": "3.22.4"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "4.1.8"
   }
 }

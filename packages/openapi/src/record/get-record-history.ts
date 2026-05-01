@@ -1,7 +1,7 @@
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
-import { IdPrefix, fieldVoSchema } from '@teable/core';
+import { fieldVoSchema } from '@teable/core';
 import { axios } from '../axios';
-import { itemSpaceCollaboratorSchema } from '../space';
+import { userMapVoSchema } from '../trash';
 import { registerRoute, urlBuilder } from '../utils';
 import { z } from '../zod';
 
@@ -12,11 +12,17 @@ export const getRecordHistoryQuerySchema = z.object({
 });
 
 export const recordHistoryItemStateVoSchema = z.object({
-  meta: fieldVoSchema.pick({ name: true, type: true, cellValueType: true }).merge(
-    z.object({
-      options: z.unknown(),
+  meta: fieldVoSchema
+    .pick({
+      name: true,
+      type: true,
+      cellValueType: true,
+      isLookup: true,
+      isConditionalLookup: true,
     })
-  ),
+    .extend({
+      options: z.unknown(),
+    }),
   data: z.unknown(),
 });
 
@@ -37,20 +43,7 @@ export type IRecordHistoryItemVo = z.infer<typeof recordHistoryItemVoSchema>;
 
 export const recordHistoryVoSchema = z.object({
   historyList: z.array(recordHistoryItemVoSchema),
-  userMap: z.record(
-    z.string().startsWith(IdPrefix.User),
-    itemSpaceCollaboratorSchema
-      .pick({
-        email: true,
-        avatar: true,
-      })
-      .merge(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-        })
-      )
-  ),
+  userMap: userMapVoSchema,
   nextCursor: z.string().nullish(),
 });
 
@@ -61,7 +54,9 @@ export const GET_RECORD_HISTORY_URL = '/table/{tableId}/record/{recordId}/histor
 export const GetRecordHistoryRoute: RouteConfig = registerRoute({
   method: 'get',
   path: GET_RECORD_HISTORY_URL,
-  description: 'Get the history list for a record',
+  summary: 'Get record history',
+  description:
+    'Retrieve the change history of a specific record, including field modifications and user information.',
   request: {
     params: z.object({
       tableId: z.string(),

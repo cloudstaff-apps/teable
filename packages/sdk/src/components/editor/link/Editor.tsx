@@ -2,12 +2,12 @@ import type { ILinkCellValue, ILinkFieldOptions } from '@teable/core';
 import { isMultiValueLink } from '@teable/core';
 import { Plus } from '@teable/icons';
 import type { IGetRecordsRo } from '@teable/openapi';
-import { Button, Dialog, DialogContent, DialogTrigger, useToast } from '@teable/ui-lib';
-import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { StandaloneViewProvider } from '../../../context';
+import { Button, Dialog, DialogContent, DialogTrigger, sonner } from '@teable/ui-lib';
+import { useState, useRef, useMemo, useCallback } from 'react';
+import { LinkViewProvider, RowCountProvider } from '../../../context';
 import { useTranslation } from '../../../context/app/i18n';
-import { useBaseId } from '../../../hooks/use-base-id';
-import { ExpandRecorder } from '../../expand-record';
+import { LinkFilterProvider } from '../../../context/query/LinkFilterProvider';
+import { ExpandRecorder, isLinkedRecordOpen } from '../../expand-record';
 import type { ILinkEditorMainRef } from './EditorMain';
 import { LinkEditorMain } from './EditorMain';
 import { LinkListType } from './interface';
@@ -15,6 +15,7 @@ import { LinkCard } from './LinkCard';
 import type { ILinkListRef } from './LinkList';
 import { LinkList } from './LinkList';
 
+const { toast } = sonner;
 interface ILinkEditorProps {
   options: ILinkFieldOptions;
   fieldId: string;
@@ -33,8 +34,6 @@ export enum LinkDisplayType {
 
 export const LinkEditor = (props: ILinkEditorProps) => {
   const {
-    fieldId,
-    recordId,
     cellValue,
     options,
     onChange,
@@ -42,14 +41,11 @@ export const LinkEditor = (props: ILinkEditorProps) => {
     className,
     displayType = LinkDisplayType.Grid,
   } = props;
-  const { toast } = useToast();
   const listRef = useRef<ILinkListRef>(null);
   const linkEditorMainRef = useRef<ILinkEditorMainRef>(null);
   const [isEditing, setEditing] = useState<boolean>(false);
-  const [values, setValues] = useState<ILinkCellValue[]>();
   const [expandRecordId, setExpandRecordId] = useState<string>();
   const { t } = useTranslation();
-  const baseId = useBaseId();
 
   const { foreignTableId, relationship } = options;
   const isMultiple = isMultiValueLink(relationship);
@@ -59,26 +55,25 @@ export const LinkEditor = (props: ILinkEditorProps) => {
   const recordIds = cvArray?.map((cv) => cv.id);
   const selectedRowCount = recordIds?.length ?? 0;
 
-  const isEqualPrevValue = useMemo(() => {
-    return JSON.stringify(values) === JSON.stringify(cellValue);
-  }, [cellValue, values]);
+  const selectedRecordIds = useMemo(() => {
+    return Array.isArray(cellValue)
+      ? cellValue.map((v) => v.id)
+      : cellValue?.id
+        ? [cellValue.id]
+        : [];
+  }, [cellValue]);
 
   const recordQuery = useMemo((): IGetRecordsRo => {
     return {
-      filterLinkCellSelected: recordId ? [fieldId, recordId] : fieldId,
+      selectedRecordIds,
     };
-  }, [fieldId, recordId]);
-
-  useEffect(() => {
-    if (cellValue == null) return setValues(cellValue);
-    setValues(Array.isArray(cellValue) ? cellValue : [cellValue]);
-  }, [cellValue]);
+  }, [selectedRecordIds]);
 
   const updateExpandRecordId = (recordId?: string) => {
     if (recordId) {
-      const existed = document.getElementById(`${foreignTableId}-${recordId}`);
+      const existed = isLinkedRecordOpen(foreignTableId, recordId);
       if (existed) {
-        toast({ description: 'This record is already open.' });
+        toast.warning(t('editor.link.alreadyOpen'));
         return;
       }
     }
@@ -95,18 +90,19 @@ export const LinkEditor = (props: ILinkEditorProps) => {
     );
   };
 
-  const onRecordListChange = useCallback((value?: ILinkCellValue[]) => {
-    setValues(value);
-  }, []);
+  const onRecordListChange = useCallback(
+    (value?: ILinkCellValue[]) => {
+      if (!value || value.length === 0) {
+        return onChange?.(null);
+      }
+      onChange?.(isMultiple ? value : value[0]);
+    },
+    [isMultiple, onChange]
+  );
 
   const onOpenChange = (open: boolean) => {
     if (open) return setEditing?.(true);
     return linkEditorMainRef.current?.onReset();
-  };
-
-  const onConfirm = () => {
-    if (values == null) return onChange?.(null);
-    onChange?.(isMultiple ? values : values[0]);
   };
 
   return (
@@ -114,19 +110,28 @@ export const LinkEditor = (props: ILinkEditorProps) => {
       {Boolean(selectedRowCount) &&
         (displayType === LinkDisplayType.Grid ? (
           <div className="relative h-40 w-full overflow-hidden rounded-md border">
-            <StandaloneViewProvider baseId={baseId} tableId={foreignTableId}>
-              <LinkList
-                ref={listRef}
-                type={LinkListType.Selected}
-                rowCount={selectedRowCount}
-                readonly={readonly}
-                cellValue={cellValue}
-                isMultiple={isMultiple}
-                recordQuery={recordQuery}
-                onChange={onRecordListChange}
-                onExpand={onRecordExpand}
-              />
-            </StandaloneViewProvider>
+            <LinkViewProvider linkFieldId={props.fieldId}>
+              <LinkFilterProvider
+                filterLinkCellCandidate={
+                  props.recordId ? [props.fieldId, props.recordId] : props.fieldId
+                }
+                selectedRecordIds={props.recordId ? undefined : selectedRecordIds}
+              >
+                <RowCountProvider>
+                  <LinkList
+                    ref={listRef}
+                    type={LinkListType.Selected}
+                    rowCount={selectedRowCount}
+                    readonly={readonly}
+                    cellValue={cellValue}
+                    isMultiple={isMultiple}
+                    recordQuery={recordQuery}
+                    onChange={onRecordListChange}
+                    onExpand={onRecordExpand}
+                  />
+                </RowCountProvider>
+              </LinkFilterProvider>
+            </LinkViewProvider>
           </div>
         ) : (
           cvArray?.map(({ id, title }) => (
@@ -145,11 +150,11 @@ export const LinkEditor = (props: ILinkEditorProps) => {
             <Dialog open={isEditing} onOpenChange={onOpenChange}>
               <DialogTrigger asChild>
                 <Button variant="outline" size={'sm'} className={className}>
-                  <Plus />
+                  <Plus className="size-4 shrink-0" />
                   {t('editor.link.selectRecord')}
                 </Button>
               </DialogTrigger>
-              <DialogContent className="flex h-[520px] max-w-4xl flex-col">
+              <DialogContent className="flex h-[520px] max-w-4xl flex-col p-4">
                 <LinkEditorMain
                   {...props}
                   ref={linkEditorMainRef}
@@ -158,18 +163,12 @@ export const LinkEditor = (props: ILinkEditorProps) => {
                 />
               </DialogContent>
             </Dialog>
-            {Boolean(selectedRowCount) &&
-              !isEqualPrevValue &&
-              displayType === LinkDisplayType.Grid && (
-                <Button size={'sm'} onClick={onConfirm}>
-                  {t('common.confirm')}
-                </Button>
-              )}
           </div>
           <ExpandRecorder
             tableId={foreignTableId}
             recordId={expandRecordId}
             recordIds={recordIds}
+            isLinkedRecord
             onUpdateRecordIdCallback={updateExpandRecordId}
             onClose={() => updateExpandRecordId(undefined)}
           />

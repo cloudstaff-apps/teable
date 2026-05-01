@@ -1,13 +1,52 @@
 import React from 'react';
 
 export interface IServerEnv {
+  buildVersion?: string;
+  gitCommitSha?: string;
+  previewTag?: string;
   driver?: string;
+  brandName?: string;
+  brandLogo?: string;
   templateSiteLink?: string;
   microsoftClarityId?: string;
+  umamiWebSiteId?: string;
+  gaId?: string;
+  googleAdsConversionId?: string;
+  umamiUrl?: string;
   sentryDsn?: string;
   socialAuthProviders?: string[];
-  storagePrefix?: string;
+  storage?: {
+    provider?: 'local' | 'minio' | 's3';
+    prefix?: string;
+    publicBucket?: string;
+    publicUrl?: string;
+  };
   edition?: string;
+  passwordLoginDisabled?: boolean;
+  // global settings
+  globalSettings?: {
+    disallowSignUp?: boolean;
+    disallowSpaceCreation?: boolean;
+    disallowSpaceInvitation?: boolean;
+    aiConfig?: {
+      enable: boolean;
+    };
+  };
+  enableDomainEmail?: boolean;
+  maxSearchFieldCount?: number;
+  chatContextAttachmentSize?: number;
+  publicOrigin?: string;
+  publicDatabaseProxy?: string;
+  changeEmailSendMailCodeRate?: number;
+  resetPasswordSendMailCodeRate?: number;
+  signupVerificationSendMailCodeRate?: number;
+  enableCanaryFeature?: boolean;
+  task?: {
+    maxTaskRows?: number;
+  };
+  trash?: {
+    retentionDays?: number;
+  };
 }
 
 export const EnvContext = React.createContext<IServerEnv>({});

@@ -1,11 +1,18 @@
 import type { DynamicModule, MiddlewareConsumer, ModuleMetadata, NestModule } from '@nestjs/common';
 import { Global, Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { context, trace } from '@opentelemetry/api';
 import { PrismaModule } from '@teable/db-main-prisma';
 import type { Request } from 'express';
 import { nanoid } from 'nanoid';
 import { ClsMiddleware, ClsModule } from 'nestjs-cls';
+import {
+  I18nModule,
+  QueryResolver,
+  AcceptLanguageResolver,
+  HeaderResolver,
+  CookieResolver,
+} from 'nestjs-i18n';
 import { CacheModule } from '../cache/cache.module';
 import { ConfigModule } from '../configs/config.module';
 import { X_REQUEST_ID } from '../const';
@@ -14,7 +21,12 @@ import { EventEmitterModule } from '../event-emitter/event-emitter.module';
 import { AuthGuard } from '../features/auth/guard/auth.guard';
 import { PermissionGuard } from '../features/auth/guard/permission.guard';
 import { PermissionModule } from '../features/auth/permission.module';
-import { MailSenderModule } from '../features/mail-sender/mail-sender.module';
+import { DataLoaderModule } from '../features/data-loader/data-loader.module';
+import { ModelModule } from '../features/model/model.module';
+import { RequestInfoMiddleware } from '../middleware/request-info.middleware';
+import { PerformanceCacheModule } from '../performance-cache';
+import { RouteTracingInterceptor } from '../tracing/route-tracing.interceptor';
+import { getI18nPath, getI18nTypesOutputPath } from '../utils/i18n';
 import { KnexModule } from './knex';
 
 const globalModules = {
@@ -23,7 +35,7 @@ const globalModules = {
     ClsModule.forRoot({
       global: true,
       middleware: {
-        mount: true,
+        mount: false,
         generateId: true,
         idGenerator: (req: Request) => {
           const existingID = req.headers[X_REQUEST_ID] as string;
@@ -38,15 +50,45 @@ const globalModules = {
       },
     }),
     CacheModule.register({ global: true }),
-    MailSenderModule.register({ global: true }),
     EventEmitterModule.register({ global: true }),
     KnexModule.register(),
+    ModelModule,
     PrismaModule,
     PermissionModule,
+    DataLoaderModule,
+    PerformanceCacheModule,
+    I18nModule.forRootAsync({
+      useFactory: () => {
+        const i18nPath = getI18nPath();
+        const typesOutputPath = getI18nTypesOutputPath();
+        return {
+          fallbackLanguage: 'en',
+          loaderOptions: {
+            path: i18nPath,
+            watch: process.env.NODE_ENV !== 'production',
+          },
+          typesOutputPath,
+          formatter: (template: string, ...args: Array<string | Record<string, string>>) => {
+            // replace {{field}} to {$field}
+            const normalized = template.replace(/\{\{\s*(\w+)\s*\}\}/g, '{$1}');
+            const options = I18nModule['sanitizeI18nOptions']();
+            return options.formatter(normalized, ...args);
+          },
+        };
+      },
+      resolvers: [
+        { use: QueryResolver, options: ['lang'] },
+        { use: CookieResolver, options: ['NEXT_LOCALE'] },
+        AcceptLanguageResolver,
+        new HeaderResolver(['x-lang']),
+      ],
+    }),
   ],
+
   // for overriding the default TablePermissionService, FieldPermissionService, RecordPermissionService, and ViewPermissionService
   providers: [
     DbProvider,
+    RequestInfoMiddleware,
     {
       provide: APP_GUARD,
       useClass: AuthGuard,
@@ -54,6 +96,10 @@ const globalModules = {
     {
       provide: APP_GUARD,
       useClass: PermissionGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: RouteTracingInterceptor,
     },
   ],
   exports: [DbProvider],
@@ -63,7 +109,7 @@ const globalModules = {
 @Module(globalModules)
 export class GlobalModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(ClsMiddleware).forRoutes('*');
+    consumer.apply(ClsMiddleware).forRoutes('*').apply(RequestInfoMiddleware).forRoutes('*');
   }
 
   static register(moduleMetadata: ModuleMetadata): DynamicModule {

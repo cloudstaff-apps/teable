@@ -1,7 +1,8 @@
 import { Logger } from '@nestjs/common';
+import type { FieldCore } from '@teable/core';
 import { CellValueType } from '@teable/core';
 import type { Knex } from 'knex';
-import type { IFieldInstance } from '../../features/field/model/factory';
+import type { IRecordQueryGroupContext } from '../../features/record/query-builder/record-query-builder.interface';
 import type { IGroupQueryInterface, IGroupQueryExtra } from './group-query.interface';
 
 export abstract class AbstractGroupQuery implements IGroupQueryInterface {
@@ -10,13 +11,22 @@ export abstract class AbstractGroupQuery implements IGroupQueryInterface {
   constructor(
     protected readonly knex: Knex,
     protected readonly originQueryBuilder: Knex.QueryBuilder,
-    protected readonly fieldMap?: { [fieldId: string]: IFieldInstance },
+    protected readonly fieldMap?: { [fieldId: string]: FieldCore },
     protected readonly groupFieldIds?: string[],
-    protected readonly extra?: IGroupQueryExtra
+    protected readonly extra?: IGroupQueryExtra,
+    protected readonly context?: IRecordQueryGroupContext
   ) {}
 
   appendGroupBuilder(): Knex.QueryBuilder {
     return this.parseGroups(this.originQueryBuilder, this.groupFieldIds);
+  }
+
+  protected getTableColumnName(field: FieldCore): string {
+    const selection = this.context?.selectionMap.get(field.id);
+    if (selection) {
+      return selection as string;
+    }
+    return field.dbFieldName;
   }
 
   private parseGroups(
@@ -39,7 +49,7 @@ export abstract class AbstractGroupQuery implements IGroupQueryInterface {
     return queryBuilder;
   }
 
-  private getGroupAdapter(field: IFieldInstance): Knex.QueryBuilder {
+  private getGroupAdapter(field: FieldCore): Knex.QueryBuilder {
     if (!field) return this.originQueryBuilder;
     const { cellValueType, isMultipleCellValue, isStructuredCellValue } = field;
 
@@ -74,15 +84,15 @@ export abstract class AbstractGroupQuery implements IGroupQueryInterface {
     }
   }
 
-  abstract string(field: IFieldInstance): Knex.QueryBuilder;
+  abstract string(field: FieldCore): Knex.QueryBuilder;
 
-  abstract date(field: IFieldInstance): Knex.QueryBuilder;
+  abstract date(field: FieldCore): Knex.QueryBuilder;
 
-  abstract number(field: IFieldInstance): Knex.QueryBuilder;
+  abstract number(field: FieldCore): Knex.QueryBuilder;
 
-  abstract json(field: IFieldInstance): Knex.QueryBuilder;
+  abstract json(field: FieldCore): Knex.QueryBuilder;
 
-  abstract multipleDate(field: IFieldInstance): Knex.QueryBuilder;
+  abstract multipleDate(field: FieldCore): Knex.QueryBuilder;
 
-  abstract multipleNumber(field: IFieldInstance): Knex.QueryBuilder;
+  abstract multipleNumber(field: FieldCore): Knex.QueryBuilder;
 }

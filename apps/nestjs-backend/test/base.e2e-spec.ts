@@ -1,25 +1,41 @@
 import type { INestApplication } from '@nestjs/common';
-import { Role } from '@teable/core';
+import type { ILinkFieldOptions } from '@teable/core';
+import { FieldType, Relationship, Role } from '@teable/core';
 import type {
   ICreateBaseVo,
   ICreateSpaceVo,
   IUserMeVo,
   ListBaseInvitationLinkVo,
+  UserCollaboratorItem,
+  IBaseErdEdge,
 } from '@teable/openapi';
 import {
+  baseErdVoSchema,
   CREATE_BASE,
   CREATE_BASE_INVITATION_LINK,
   CREATE_SPACE,
   createBaseInvitationLink,
   createBaseInvitationLinkVoSchema,
+  createTable,
   DELETE_BASE,
+  DELETE_BASE_COLLABORATOR,
   DELETE_SPACE,
+  DELETE_SPACE_COLLABORATOR,
   deleteBaseCollaborator,
   deleteBaseInvitationLink,
   EMAIL_BASE_INVITATION,
+  EMAIL_SPACE_INVITATION,
   emailBaseInvitation,
+  GET_BASE_ALL,
+  GET_BASE_LIST,
+  getBaseAll,
   getBaseCollaboratorList,
+  getBaseErd,
+  getUserCollaborators,
+  listBaseCollaboratorUserVoSchema,
   listBaseInvitationLink,
+  MOVE_BASE,
+  PrincipalType,
   UPDATE_BASE_COLLABORATE,
   UPDATE_BASE_INVITATION_LINK,
   updateBaseCollaborator,
@@ -30,7 +46,14 @@ import {
 import type { AxiosInstance } from 'axios';
 import { createNewUserAxios } from './utils/axios-instance/new-user';
 import { getError } from './utils/get-error';
-import { initApp } from './utils/init-app';
+import {
+  createBase,
+  createField,
+  createSpace,
+  deleteSpace,
+  initApp,
+  permanentDeleteSpace,
+} from './utils/init-app';
 
 describe('OpenAPI BaseController (e2e)', () => {
   let app: INestApplication;
@@ -152,7 +175,20 @@ describe('OpenAPI BaseController (e2e)', () => {
 
     it('/api/base/:baseId/invitation/link (GET)', async () => {
       const res = await getBaseCollaboratorList(baseId);
-      expect(res.data).toHaveLength(2);
+      expect(res.data.collaborators).toHaveLength(2);
+    });
+
+    it('/api/base/:baseId/invitation/link (GET) - pagination', async () => {
+      const res = await getBaseCollaboratorList(baseId, { skip: 1, take: 1 });
+      expect(res.data.collaborators).toHaveLength(1);
+      expect(res.data.total).toBe(2);
+    });
+
+    it('/api/base/:baseId/invitation/link (GET) - search', async () => {
+      const res = await getBaseCollaboratorList(baseId, { search: 'newuser' });
+      expect(res.data.collaborators).toHaveLength(1);
+      expect((res.data.collaborators[0] as UserCollaboratorItem).email).toBe(newUserEmail);
+      expect(res.data.total).toBe(1);
     });
 
     it('/api/base/:baseId/invitation/link/:invitationId (DELETE)', async () => {
@@ -174,9 +210,11 @@ describe('OpenAPI BaseController (e2e)', () => {
         emailBaseInvitationRo: { role: Role.Creator, emails: [newUser3Email] },
       });
 
-      const collaborators = (await getBaseCollaboratorList(baseId)).data;
+      const { collaborators } = (await getBaseCollaboratorList(baseId)).data;
 
-      const newCollaboratorInfo = collaborators.find(({ email }) => email === newUser3Email);
+      const newCollaboratorInfo = (collaborators as UserCollaboratorItem[]).find(
+        ({ email }) => email === newUser3Email
+      );
 
       expect(newCollaboratorInfo).not.toBeUndefined();
       expect(newCollaboratorInfo?.role).toEqual(Role.Creator);
@@ -201,7 +239,7 @@ describe('OpenAPI BaseController (e2e)', () => {
         baseId,
         emailBaseInvitationRo: { emails: ['not.exist@email.com'], role: Role.Creator },
       });
-      const collaborators = (await getBaseCollaboratorList(baseId)).data;
+      const { collaborators } = (await getBaseCollaboratorList(baseId)).data;
       expect(collaborators).toHaveLength(3);
     });
 
@@ -226,12 +264,32 @@ describe('OpenAPI BaseController (e2e)', () => {
         newUser3Id = res.data.id;
       });
 
+      it('/api/base/:baseId/collaborator/users (GET)', async () => {
+        const res = await getUserCollaborators(baseId);
+        expect(res.data.users).toHaveLength(3);
+        expect(res.data.total).toBe(3);
+        expect(listBaseCollaboratorUserVoSchema.strict().safeParse(res.data).success).toEqual(true);
+      });
+
+      it('/api/base/:baseId/collaborator/users (GET) - pagination', async () => {
+        const res = await getUserCollaborators(baseId, { skip: 1, take: 1 });
+        expect(res.data.users).toHaveLength(1);
+        expect(res.data.total).toBe(3);
+      });
+
+      it('/api/base/:baseId/collaborator/users (GET) - search', async () => {
+        const res = await getUserCollaborators(baseId, { search: 'newuser' });
+        expect(res.data.users).toHaveLength(2);
+        expect(res.data.total).toBe(2);
+      });
+
       it('/api/base/:baseId/collaborators (PATCH)', async () => {
         const res = await updateBaseCollaborator({
           baseId,
           updateBaseCollaborateRo: {
             role: Role.Creator,
-            userId: newUser3Id,
+            principalId: newUser3Id,
+            principalType: PrincipalType.User,
           },
         });
         expect(res.status).toBe(200);
@@ -244,22 +302,82 @@ describe('OpenAPI BaseController (e2e)', () => {
               baseId,
             }),
             {
-              role: Role.Creator,
-              userId: newUser3Id,
+              role: Role.Viewer,
+              principalId: globalThis.testConfig.userId,
+              principalType: PrincipalType.User,
             }
           )
         );
         expect(error?.status).toBe(403);
       });
 
+      it('/api/base/:baseId/collaborators (PATCH) - exceeds limit role - system user', async () => {
+        await updateBaseCollaborator({
+          baseId: baseId,
+          updateBaseCollaborateRo: {
+            role: Role.Editor,
+            principalId: globalThis.testConfig.userId,
+            principalType: PrincipalType.User,
+          },
+        });
+        const error = await getError(() =>
+          updateBaseCollaborator({
+            baseId: baseId,
+            updateBaseCollaborateRo: {
+              role: Role.Creator,
+              principalId: globalThis.testConfig.userId,
+              principalType: PrincipalType.User,
+            },
+          })
+        );
+        expect(error?.status).toBe(403);
+      });
+
+      it('/api/base/:baseId/collaborators (PATCH) - self ', async () => {
+        const res = await updateBaseCollaborator({
+          baseId: baseId,
+          updateBaseCollaborateRo: {
+            role: Role.Editor,
+            principalId: globalThis.testConfig.userId,
+            principalType: PrincipalType.User,
+          },
+        });
+        expect(res?.status).toBe(200);
+      });
+
+      it('/api/base/:baseId/collaborators (PATCH) - allow update role equal to self', async () => {
+        await updateBaseCollaborator({
+          baseId: baseId,
+          updateBaseCollaborateRo: {
+            role: Role.Editor,
+            principalId: globalThis.testConfig.userId,
+            principalType: PrincipalType.User,
+          },
+        });
+        const res = await user3Request.patch<void>(
+          urlBuilder(UPDATE_BASE_COLLABORATE, {
+            baseId,
+          }),
+          {
+            role: Role.Viewer,
+            principalId: newUser3Id,
+            principalType: PrincipalType.User,
+          }
+        );
+        expect(res?.status).toBe(200);
+      });
+
       it('/api/base/:baseId/collaborators (DELETE)', async () => {
         const res = await deleteBaseCollaborator({
           baseId,
-          userId: newUser3Id,
+          deleteBaseCollaboratorRo: {
+            principalId: newUser3Id,
+            principalType: PrincipalType.User,
+          },
         });
         expect(res.status).toBe(200);
         const collList = await getBaseCollaboratorList(baseId);
-        expect(collList.data).toHaveLength(2);
+        expect(collList.data.collaborators).toHaveLength(2);
       });
 
       it('/api/base/:baseId/collaborators (DELETE) - exceeds limit role', async () => {
@@ -267,13 +385,17 @@ describe('OpenAPI BaseController (e2e)', () => {
           baseId,
           updateBaseCollaborateRo: {
             role: Role.Creator,
-            userId: newUser3Id,
+            principalId: newUser3Id,
+            principalType: PrincipalType.User,
           },
         });
         const error = await getError(() =>
           deleteBaseCollaborator({
             baseId,
-            userId: newUser3Id,
+            deleteBaseCollaboratorRo: {
+              principalId: newUser3Id,
+              principalType: PrincipalType.User,
+            },
           })
         );
         expect(error?.status).toBe(403);
@@ -282,11 +404,374 @@ describe('OpenAPI BaseController (e2e)', () => {
       it('/api/base/:baseId/collaborators (DELETE) - self', async () => {
         await deleteBaseCollaborator({
           baseId: baseId,
-          userId: globalThis.testConfig.userId,
+          deleteBaseCollaboratorRo: {
+            principalId: globalThis.testConfig.userId,
+            principalType: PrincipalType.User,
+          },
         });
         const error = await getError(() => getBaseCollaboratorList(baseId));
         expect(error?.status).toBe(403);
       });
+
+      it('/api/base/:baseId/collaborators (DELETE) - space user delete base user', async () => {
+        const res = await userRequest.delete(urlBuilder(DELETE_BASE_COLLABORATOR, { baseId }), {
+          params: { principalId: newUser3Id, principalType: PrincipalType.User },
+        });
+        expect(res.status).toBe(200);
+      });
+
+      it('/api/space/:spaceId/collaborators (DELETE) - space user delete base user', async () => {
+        const res = await userRequest.delete(urlBuilder(DELETE_BASE_COLLABORATOR, { baseId }), {
+          params: { principalId: newUser3Id, principalType: PrincipalType.User },
+        });
+        expect(res.status).toBe(200);
+      });
+
+      it('/api/base/:baseId/move (PUT)', async () => {
+        const user1SpaceId = (
+          await userRequest.post<ICreateSpaceVo>(CREATE_SPACE, { name: 'new base' })
+        ).data.id;
+
+        const user1SpaceId2 = (
+          await userRequest.post<ICreateSpaceVo>(CREATE_SPACE, { name: 'new base2' })
+        ).data.id;
+
+        const spaceBaseList1 = (
+          await userRequest.get(urlBuilder(GET_BASE_LIST, { spaceId: user1SpaceId }))
+        ).data;
+
+        const spaceBaseList2 = (
+          await userRequest.get(urlBuilder(GET_BASE_LIST, { spaceId: user1SpaceId2 }))
+        ).data;
+
+        expect(spaceBaseList1.length).toBe(0);
+        expect(spaceBaseList2.length).toBe(0);
+
+        const newBase1 = (
+          await userRequest.post(urlBuilder(CREATE_BASE), {
+            name: 'base1',
+            spaceId: user1SpaceId,
+          })
+        ).data;
+
+        // move base
+        await userRequest.put(
+          urlBuilder(MOVE_BASE, {
+            baseId: newBase1.id,
+          }),
+          {
+            spaceId: user1SpaceId2,
+          }
+        );
+
+        const spaceBaseList1AfterMove = (
+          await userRequest.get(urlBuilder(GET_BASE_LIST, { spaceId: user1SpaceId2 }))
+        ).data;
+
+        expect(spaceBaseList1AfterMove.length).toBe(1);
+        expect(spaceBaseList1AfterMove[0].id).toBe(newBase1.id);
+      });
+    });
+  });
+
+  it('/api/base/access/all (GET)', async () => {
+    const spaceId1 = await createSpace({
+      name: 'new space test base access all',
+    }).then((res) => res.id);
+    const baseId1 = await createBase({
+      name: 'new base test base access all',
+      spaceId: spaceId1,
+    }).then((res) => res.id);
+    const spaceId2 = await createSpace({
+      name: 'new space test base access all',
+    }).then((res) => res.id);
+    const baseId2 = await createBase({
+      name: 'new base test base access all',
+      spaceId: spaceId2,
+    }).then((res) => res.id);
+
+    await deleteSpace(spaceId1);
+
+    const res = await getBaseAll();
+
+    await permanentDeleteSpace(spaceId1);
+    await permanentDeleteSpace(spaceId2);
+
+    expect(res.data.find((v) => v.id === baseId1)).toBeUndefined();
+    expect(res.data.find((v) => v.id === baseId2)).toBeDefined();
+  });
+
+  describe('Base owner display after member removal', () => {
+    const userAEmail = 'userA-t1606@example.com';
+    const userBEmail = 'userB-t1606@example.com';
+    let userARequest: AxiosInstance;
+    let userBRequest: AxiosInstance;
+    let userAId: string;
+    let userBId: string;
+    let spaceId: string;
+    let baseId: string;
+
+    beforeAll(async () => {
+      // Create user A (space owner) and user B
+      userARequest = await createNewUserAxios({
+        email: userAEmail,
+        password: '12345678',
+      });
+      userBRequest = await createNewUserAxios({
+        email: userBEmail,
+        password: '12345678',
+      });
+
+      // Get user A's ID (space owner)
+      const userAInfo = await userARequest.get<IUserMeVo>(USER_ME);
+      userAId = userAInfo.data.id;
+
+      // Get user B's ID
+      const userBInfo = await userBRequest.get<IUserMeVo>(USER_ME);
+      userBId = userBInfo.data.id;
+
+      // User A creates a space
+      spaceId = (
+        await userARequest.post<ICreateSpaceVo>(CREATE_SPACE, { name: 'T1606 test space' })
+      ).data.id;
+
+      // User A invites user B to the space
+      await userARequest.post(urlBuilder(EMAIL_SPACE_INVITATION, { spaceId }), {
+        emails: [userBEmail],
+        role: Role.Creator,
+      });
+
+      // User B creates a base in the space
+      baseId = (
+        await userBRequest.post<ICreateBaseVo>(CREATE_BASE, {
+          name: 'T1606 test base',
+          spaceId,
+        })
+      ).data.id;
+    });
+
+    afterAll(async () => {
+      // Clean up
+      await userARequest.delete(urlBuilder(DELETE_BASE, { baseId }));
+      await userARequest.delete(urlBuilder(DELETE_SPACE, { spaceId }));
+    });
+
+    it('should fallback to space owner when creator is removed from space', async () => {
+      // Verify user B is the creator before removal (via getBaseAll)
+      const beforeRemoval = await userARequest.get(GET_BASE_ALL);
+      const baseBefore = beforeRemoval.data.find((b: { id: string }) => b.id === baseId);
+      expect(baseBefore).toBeDefined();
+      expect(baseBefore.createdUser).toBeDefined();
+      expect(baseBefore.createdUser.id).toBe(userBId);
+
+      // User A removes user B from the space
+      await userARequest.delete(urlBuilder(DELETE_SPACE_COLLABORATOR, { spaceId }), {
+        params: { principalId: userBId, principalType: PrincipalType.User },
+      });
+
+      // Verify createdUser is now the space owner (user A) after removal
+      const afterRemoval = await userARequest.get(GET_BASE_ALL);
+      const baseAfter = afterRemoval.data.find((b: { id: string }) => b.id === baseId);
+      expect(baseAfter).toBeDefined();
+      // The createdUser should fallback to space owner (user A) since user B is no longer in the space
+      expect(baseAfter.createdUser).toBeDefined();
+      expect(baseAfter.createdUser.id).toBe(userAId);
+    });
+  });
+
+  describe('Base ERD', () => {
+    let spaceId1: string;
+
+    beforeEach(async () => {
+      spaceId1 = await createSpace({
+        name: 'new space test base erd',
+      }).then((res) => res.id);
+    });
+    afterEach(async () => {
+      await permanentDeleteSpace(spaceId1);
+    });
+
+    const getRelationReference = (edges: IBaseErdEdge[]) => {
+      return edges
+        .filter((edge) => Boolean(edge.relationship))
+        .map((edge) => {
+          const { source, target } = edge;
+          return `${source.tableId}.${source.fieldId}-${target.tableId}.${target.fieldId}`;
+        })
+        .sort();
+    };
+
+    const getTypeMap = (edges: IBaseErdEdge[]) => {
+      return edges
+        .filter((edge) => !edge.relationship)
+        .reduce(
+          (acc, edge) => {
+            acc[edge.type] = (acc[edge.type] || 0) + 1;
+            return acc;
+          },
+          {} as Record<FieldType | 'lookup', number>
+        );
+    };
+
+    it('/api/base/:baseId/erd (GET) - relationship', async () => {
+      const baseId = await createBase({
+        spaceId: spaceId1,
+      }).then((res) => res.id);
+      const table1 = await createTable(baseId).then((res) => res.data);
+      const table2 = await createTable(baseId).then((res) => res.data);
+
+      await createField(table1.id, {
+        name: 'new link field1',
+        type: FieldType.Link,
+        options: {
+          isOneWay: true,
+          foreignTableId: table2.id,
+          relationship: Relationship.OneOne,
+        },
+      });
+
+      await createField(table1.id, {
+        name: 'new link field2',
+        type: FieldType.Link,
+        options: {
+          isOneWay: true,
+          relationship: Relationship.OneMany,
+          foreignTableId: table2.id,
+        },
+      });
+
+      await createField(table1.id, {
+        name: 'new link field3',
+        type: FieldType.Link,
+        options: {
+          foreignTableId: table2.id,
+          relationship: Relationship.ManyOne,
+        },
+      });
+
+      await createField(table1.id, {
+        name: 'new link field4',
+        type: FieldType.Link,
+        options: {
+          foreignTableId: table2.id,
+          relationship: Relationship.ManyMany,
+        },
+      });
+
+      const data = await getBaseErd(baseId).then((res) => res.data);
+      expect(baseErdVoSchema.safeParse(data).success).toEqual(true);
+      expect(data.baseId).toEqual(baseId);
+      expect(getRelationReference(data.edges).length).toEqual(4);
+    });
+
+    it('/api/base/:baseId/erd (GET) - reference(formula, lookup, rollup, link)', async () => {
+      const baseId = await createBase({
+        spaceId: spaceId1,
+      }).then((res) => res.id);
+      const table1 = await createTable(baseId).then((res) => res.data);
+      const table2 = await createTable(baseId).then((res) => res.data);
+
+      const textField = table1.fields[0];
+      const linkField = await createField(table1.id, {
+        type: FieldType.Link,
+        options: {
+          foreignTableId: table2.id,
+          relationship: Relationship.OneOne,
+        },
+      });
+
+      const lookupField = await createField(table1.id, {
+        type: FieldType.SingleLineText,
+        isLookup: true,
+        lookupOptions: {
+          foreignTableId: table2.id,
+          lookupFieldId: table2.fields[0].id,
+          linkFieldId: linkField.id,
+        },
+      });
+
+      await createField(table1.id, {
+        type: FieldType.Rollup,
+        options: {
+          expression: 'countall({values})',
+        },
+        lookupOptions: {
+          foreignTableId: table2.id,
+          lookupFieldId: table2.fields[0].id,
+          linkFieldId: linkField.id,
+        },
+      });
+
+      await createField(table1.id, {
+        type: FieldType.Formula,
+        options: {
+          expression: `{${textField.id}}`,
+        },
+      });
+
+      await createField(table1.id, {
+        type: FieldType.Formula,
+        options: {
+          expression: `{${lookupField.id}}`,
+        },
+      });
+
+      const data = await getBaseErd(baseId).then((res) => res.data);
+      expect(baseErdVoSchema.safeParse(data).success).toEqual(true);
+      expect(data.baseId).toEqual(baseId);
+      expect(getRelationReference(data.edges).length).toEqual(1);
+      const typeMap = getTypeMap(data.edges);
+      expect(typeMap).toEqual({
+        formula: 2,
+        link: (linkField.options as ILinkFieldOptions).isOneWay ? 1 : 2,
+        lookup: 1,
+        rollup: 1,
+      });
+    });
+
+    it('/api/base/:baseId/erd (GET) - cross base', async () => {
+      const baseId1 = await createBase({
+        spaceId: spaceId1,
+      }).then((res) => res.id);
+      const base1Table1 = await createTable(baseId1).then((res) => res.data);
+
+      const baseId2 = await createBase({
+        spaceId: spaceId1,
+      }).then((res) => res.id);
+      const base2Table1 = await createTable(baseId2).then((res) => res.data);
+
+      await createField(base1Table1.id, {
+        type: FieldType.Link,
+        options: {
+          baseId: baseId2,
+          foreignTableId: base2Table1.id,
+          relationship: Relationship.OneOne,
+        },
+      });
+
+      const baseId3 = await createBase({
+        spaceId: spaceId1,
+      }).then((res) => res.id);
+      const base3Table1 = await createTable(baseId3).then((res) => res.data);
+
+      await createField(base2Table1.id, {
+        type: FieldType.Link,
+        options: {
+          baseId: baseId3,
+          foreignTableId: base3Table1.id,
+          relationship: Relationship.OneOne,
+        },
+      });
+
+      const base1Erd = await getBaseErd(baseId1).then((res) => res.data);
+      expect(baseErdVoSchema.safeParse(base1Erd).success).toEqual(true);
+      expect(base1Erd.baseId).toEqual(baseId1);
+      expect(getRelationReference(base1Erd.edges).length).toEqual(1);
+
+      const base2Erd = await getBaseErd(baseId2).then((res) => res.data);
+      expect(baseErdVoSchema.safeParse(base2Erd).success).toEqual(true);
+      expect(base2Erd.baseId).toEqual(baseId2);
+      expect(getRelationReference(base2Erd.edges).length).toEqual(2);
     });
   });
 });

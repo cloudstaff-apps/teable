@@ -1,4 +1,12 @@
-import { hasAllOf, hasAnyOf, hasNoneOf, isEmpty, isExactly, isNotEmpty } from '@teable/core';
+import {
+  hasAllOf,
+  hasAnyOf,
+  hasNoneOf,
+  isNotExactly,
+  isEmpty,
+  isExactly,
+  isNotEmpty,
+} from '@teable/core';
 
 export const MULTIPLE_SELECT_FIELD_CASES = [
   {
@@ -43,6 +51,13 @@ export const MULTIPLE_SELECT_FIELD_CASES = [
     expectResultLength: 1,
     expectMoreResults: false,
   },
+  {
+    fieldIndex: 6,
+    operator: isNotExactly.value,
+    queryValue: ['rap', 'rock'],
+    expectResultLength: 22,
+    expectMoreResults: true,
+  },
 ];
 
 export const MULTIPLE_SELECT_LOOKUP_FIELD_CASES = [
@@ -86,6 +101,13 @@ export const MULTIPLE_SELECT_LOOKUP_FIELD_CASES = [
     operator: isExactly.value,
     queryValue: ['rock', 'hiphop'],
     expectResultLength: 1,
+    expectMoreResults: false,
+  },
+  {
+    fieldIndex: 9,
+    operator: isNotExactly.value,
+    queryValue: ['rap'],
+    expectResultLength: 20,
     expectMoreResults: false,
   },
 ];

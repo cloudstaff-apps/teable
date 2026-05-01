@@ -9,11 +9,10 @@ export enum FieldType {
   SingleSelect = 'singleSelect',
   Date = 'date',
   Number = 'number',
-  Duration = 'duration',
   Rating = 'rating',
   Formula = 'formula',
   Rollup = 'rollup',
-  Count = 'count',
+  ConditionalRollup = 'conditionalRollup',
   Link = 'link',
   CreatedTime = 'createdTime',
   LastModifiedTime = 'lastModifiedTime',
@@ -58,12 +57,22 @@ export const RelationshipRevert = {
 export const isMultiValueLink = (relationship: Relationship): boolean =>
   relationship === Relationship.ManyMany || relationship === Relationship.OneMany;
 
-export const PRIMARY_SUPPORTED_TYPES = [
+export const PRIMARY_SUPPORTED_TYPES = new Set([
   FieldType.SingleLineText,
   FieldType.LongText,
+  FieldType.User,
+  FieldType.MultipleSelect,
+  FieldType.SingleSelect,
   FieldType.Date,
   FieldType.Number,
-];
+  FieldType.Rating,
+  FieldType.Formula,
+  FieldType.CreatedTime,
+  FieldType.LastModifiedTime,
+  FieldType.CreatedBy,
+  FieldType.LastModifiedBy,
+  FieldType.AutoNumber,
+]);
 
 export const IMPORT_SUPPORTED_TYPES = [
   FieldType.SingleLineText,

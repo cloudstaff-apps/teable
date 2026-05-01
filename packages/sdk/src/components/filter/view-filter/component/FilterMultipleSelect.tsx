@@ -13,10 +13,11 @@ interface IMultipleSelect {
   field: MultipleSelectField | SingleSelectField;
   className?: string;
   popoverClassName?: string;
+  modal?: boolean;
 }
 
 const FilterMultipleSelect = (props: IMultipleSelect) => {
-  const { field, value, onSelect, className, popoverClassName } = props;
+  const { field, value, onSelect, className, popoverClassName, modal } = props;
   const values = useMemo(() => {
     if (Array.isArray(value) && value.length) {
       return value;
@@ -34,14 +35,14 @@ const FilterMultipleSelect = (props: IMultipleSelect) => {
     return (
       <div
         key={value?.value}
-        className={cn('px-2 rounded-lg flex-1')}
+        className="flex h-5 max-w-full shrink-0 items-center rounded-full px-2 text-xs font-normal"
         style={{
           backgroundColor: ColorUtils.getHexForColor(value.color),
           color: ColorUtils.shouldUseLightTextOnColor(value.color) ? '#ffffff' : '#000000',
         }}
         title={value.label}
       >
-        {value.label}
+        <span className="truncate">{value.label}</span>
       </div>
     );
   };
@@ -49,14 +50,14 @@ const FilterMultipleSelect = (props: IMultipleSelect) => {
     return (
       <div
         key={value?.value}
-        className={cn('px-2 rounded-lg truncate')}
+        className="flex h-5 max-w-full items-center overflow-hidden rounded-full px-2 text-xs font-normal"
         style={{
           backgroundColor: ColorUtils.getHexForColor(value.color),
           color: ColorUtils.shouldUseLightTextOnColor(value.color) ? '#ffffff' : '#000000',
         }}
         title={value.label}
       >
-        {value.label}
+        <span className="truncate">{value.label}</span>
       </div>
     );
   };
@@ -71,6 +72,8 @@ const FilterMultipleSelect = (props: IMultipleSelect) => {
       className={className}
       popoverClassName={popoverClassName}
       defaultLabel={<DefaultErrorLabel />}
+      placeholderClassName="text-xs"
+      modal={modal}
     />
   );
 };

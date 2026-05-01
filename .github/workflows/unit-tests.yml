@@ -12,7 +12,9 @@ on:
       - 'packages/core/**'
       - 'packages/sdk/**'
       - 'packages/openapi/**'
-
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,7 +22,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.9.0]
+        node-version: [22.18.0]
 
     steps:
       - uses: actions/checkout@v4
@@ -44,4 +46,4 @@ jobs:
 
       - name: 🧪 Run Tests
         run: |
-          pnpm -F "!@teable/backend" -r --parralel test-unit
+          pnpm -F "!@teable/backend" -r --parallel test-unit

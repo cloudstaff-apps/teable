@@ -5,6 +5,9 @@ import { SortFunctionPostgres } from '../sort-query.function';
 
 export class StringSortAdapter extends SortFunctionPostgres {
   asc(builderClient: Knex.QueryBuilder): Knex.QueryBuilder {
+    if (!this.columnName) {
+      return builderClient;
+    }
     const { type, options } = this.field;
 
     if (type !== FieldType.SingleSelect) {
@@ -17,13 +20,16 @@ export class StringSortAdapter extends SortFunctionPostgres {
 
     const optionSets = choices.map(({ name }) => name);
     builderClient.orderByRaw(
-      `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ??) ASC NULLS FIRST`,
-      [...optionSets, this.columnName]
+      `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ${this.columnName}) ASC NULLS FIRST`,
+      [...optionSets]
     );
     return builderClient;
   }
 
   desc(builderClient: Knex.QueryBuilder): Knex.QueryBuilder {
+    if (!this.columnName) {
+      return builderClient;
+    }
     const { type, options } = this.field;
 
     if (type !== FieldType.SingleSelect) {
@@ -36,8 +42,8 @@ export class StringSortAdapter extends SortFunctionPostgres {
 
     const optionSets = choices.map(({ name }) => name);
     builderClient.orderByRaw(
-      `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ??) DESC NULLS LAST`,
-      [...optionSets, this.columnName]
+      `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ${this.columnName}) DESC NULLS LAST`,
+      [...optionSets]
     );
     return builderClient;
   }
@@ -48,15 +54,18 @@ export class StringSortAdapter extends SortFunctionPostgres {
     if (type !== FieldType.SingleSelect) {
       return super.getAscSQL();
     }
+    if (!this.columnName) {
+      return undefined;
+    }
 
     const { choices } = options as ISelectFieldOptions;
 
     const optionSets = choices.map(({ name }) => name);
     return this.knex
-      .raw(`ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ??) ASC NULLS FIRST`, [
-        ...optionSets,
-        this.columnName,
-      ])
+      .raw(
+        `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ${this.columnName}) ASC NULLS FIRST`,
+        [...optionSets]
+      )
       .toQuery();
   }
 
@@ -66,15 +75,18 @@ export class StringSortAdapter extends SortFunctionPostgres {
     if (type !== FieldType.SingleSelect) {
       return super.getDescSQL();
     }
+    if (!this.columnName) {
+      return undefined;
+    }
 
     const { choices } = options as ISelectFieldOptions;
 
     const optionSets = choices.map(({ name }) => name);
     return this.knex
       .raw(
-        `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ??) DESC NULLS LAST`,
+        `ARRAY_POSITION(ARRAY[${this.createSqlPlaceholders(optionSets)}], ${this.columnName}) DESC NULLS LAST`,
 
-        [...optionSets, this.columnName]
+        [...optionSets]
       )
       .toQuery();
   }

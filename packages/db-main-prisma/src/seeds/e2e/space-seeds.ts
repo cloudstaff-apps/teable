@@ -46,7 +46,8 @@ export const generateCollaborator = async (
     resourceId: spaceId,
     resourceType: 'space',
     roleName: 'owner',
-    userId: userSets[i].id!,
+    principalId: userSets[i].id!,
+    principalType: 'user',
     createdBy: userSets[i].id!,
   }));
 };
@@ -84,24 +85,22 @@ export class SpaceSeeds extends AbstractSeed {
     });
     this.log('UPSERT', `Base ${base.id} - ${base.name}`);
 
-    if (this.driver !== 'sqlite3') {
-      await tx.$executeRawUnsafe(`create schema if not exists "${baseId}"`);
-      await tx.$executeRawUnsafe(`revoke all on schema "${baseId}" from public`);
-    }
+    await tx.$executeRawUnsafe(`create schema if not exists "${baseId}"`);
+    await tx.$executeRawUnsafe(`revoke all on schema "${baseId}" from public`);
   }
 
   private async createCollaborator(tx: Prisma.TransactionClient) {
     const collaboratorSets = await generateCollaborator(CREATE_USER_NUM);
     for (const c of collaboratorSets) {
-      const { id, resourceId, userId, ...collaboratorNonUnique } = c;
+      const { id, resourceId, principalId, ...collaboratorNonUnique } = c;
       const collaborator = await tx.collaborator.upsert({
-        where: { id, resourceId, resourceType: 'space', userId },
+        where: { id, resourceId, resourceType: 'space', principalId },
         update: collaboratorNonUnique,
         create: c,
       });
       this.log(
         'UPSERT',
-        `Collaborator ${collaborator.id} - ${collaborator.resourceId} - ${collaborator.userId}`
+        `Collaborator ${collaborator.id} - ${collaborator.resourceId} - ${collaborator.principalId}`
       );
     }
   }

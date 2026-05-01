@@ -1,24 +1,31 @@
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
 import { axios } from '../axios';
-import { BillingProductLevel } from '../billing';
+import { BillingProductLevel, appSumoTierSchema } from '../billing';
 import { registerRoute, urlBuilder } from '../utils';
 
 export enum UsageFeature {
   NumRows = 'numRows',
   AttachmentSize = 'attachmentSize',
   NumDatabaseConnections = 'numDatabaseConnections',
+  NumCollaborators = 'numCollaborators',
+  NumAutomationSendEmail = 'numAutomationSendEmail',
+  NumAutomationRuns = 'numAutomationRuns',
 }
 
 export const usageFeatureSchema = z.object({
   [UsageFeature.NumRows]: z.number(),
   [UsageFeature.AttachmentSize]: z.number(),
   [UsageFeature.NumDatabaseConnections]: z.number(),
+  [UsageFeature.NumCollaborators]: z.number(),
+  [UsageFeature.NumAutomationSendEmail]: z.number(),
+  [UsageFeature.NumAutomationRuns]: z.number(),
 });
 
 export enum UsageFeatureLimit {
   MaxRows = 'maxRows',
   MaxSizeAttachments = 'maxSizeAttachments',
+  MaxNumAutomationRuns = 'maxNumAutomationRuns',
   MaxNumDatabaseConnections = 'maxNumDatabaseConnections',
   MaxRevisionHistoryDays = 'maxRevisionHistoryDays',
   MaxAutomationHistoryDays = 'maxAutomationHistoryDays',
@@ -27,14 +34,25 @@ export enum UsageFeatureLimit {
   AdminPanelEnable = 'adminPanelEnable',
   RowColoringEnable = 'rowColoringEnable',
   ButtonFieldEnable = 'buttonFieldEnable',
+  FieldAIEnable = 'fieldAIEnable',
+  UserGroupEnable = 'userGroupEnable',
   AdvancedExtensionsEnable = 'advancedExtensionsEnable',
   AdvancedPermissionsEnable = 'advancedPermissionsEnable',
   PasswordRestrictedSharesEnable = 'passwordRestrictedSharesEnable',
+  AuthenticationEnable = 'authenticationEnable',
+  DomainVerificationEnable = 'domainVerificationEnable',
+  OrganizationEnable = 'organizationEnable',
+  APIRateLimit = 'apiRateLimit',
+  ChatAIEnable = 'chatAIEnable',
+  AppEnable = 'appEnable',
+  CustomDomainEnable = 'customDomainEnable',
+  MaxNumAutomationSendEmail = 'maxNumAutomationSendEmail',
 }
 
 export const usageFeatureLimitSchema = z.object({
   [UsageFeatureLimit.MaxRows]: z.number(),
   [UsageFeatureLimit.MaxSizeAttachments]: z.number(),
+  [UsageFeatureLimit.MaxNumAutomationRuns]: z.number(),
   [UsageFeatureLimit.MaxNumDatabaseConnections]: z.number(),
   [UsageFeatureLimit.MaxRevisionHistoryDays]: z.number(),
   [UsageFeatureLimit.MaxAutomationHistoryDays]: z.number(),
@@ -43,14 +61,25 @@ export const usageFeatureLimitSchema = z.object({
   [UsageFeatureLimit.AdminPanelEnable]: z.boolean(),
   [UsageFeatureLimit.RowColoringEnable]: z.boolean(),
   [UsageFeatureLimit.ButtonFieldEnable]: z.boolean(),
+  [UsageFeatureLimit.FieldAIEnable]: z.boolean(),
+  [UsageFeatureLimit.UserGroupEnable]: z.boolean(),
   [UsageFeatureLimit.AdvancedExtensionsEnable]: z.boolean(),
   [UsageFeatureLimit.AdvancedPermissionsEnable]: z.boolean(),
   [UsageFeatureLimit.PasswordRestrictedSharesEnable]: z.boolean(),
+  [UsageFeatureLimit.AuthenticationEnable]: z.boolean(),
+  [UsageFeatureLimit.DomainVerificationEnable]: z.boolean(),
+  [UsageFeatureLimit.OrganizationEnable]: z.boolean(),
+  [UsageFeatureLimit.APIRateLimit]: z.number(),
+  [UsageFeatureLimit.ChatAIEnable]: z.boolean(),
+  [UsageFeatureLimit.AppEnable]: z.boolean(),
+  [UsageFeatureLimit.CustomDomainEnable]: z.boolean(),
+  [UsageFeatureLimit.MaxNumAutomationSendEmail]: z.number(),
 });
 
 export const usageVoSchema = z.object({
-  level: z.nativeEnum(BillingProductLevel),
+  level: z.enum(BillingProductLevel),
   limit: usageFeatureLimitSchema,
+  appSumoTier: appSumoTierSchema.optional(),
 });
 
 export type IUsageVo = z.infer<typeof usageVoSchema>;

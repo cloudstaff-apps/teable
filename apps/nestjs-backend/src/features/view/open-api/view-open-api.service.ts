@@ -1,21 +1,20 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ForbiddenException,
-} from '@nestjs/common';
+/* eslint-disable sonarjs/no-duplicate-string */
+import { Injectable, Logger } from '@nestjs/common';
 import type {
   IOtOperation,
   IViewRo,
   IViewVo,
   IColumnMetaRo,
-  IViewPropertyKeys,
   IViewOptions,
   IGridColumnMeta,
   IFilter,
   IFilterItem,
   ILinkFieldOptions,
+  IPluginViewOptions,
+  IViewPropertyKeys,
+  ISort,
+  IGroup,
+  TableDomain,
 } from '@teable/core';
 import {
   ViewType,
@@ -26,24 +25,41 @@ import {
   validateOptionsType,
   FieldType,
   IdPrefix,
+  generatePluginInstallId,
+  generateOperationId,
+  extractFieldIdsFromFilter,
+  validateFilterOperatorModeCompatibility,
+  HttpErrorCode,
 } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
+import { PluginPosition, PluginStatus } from '@teable/openapi';
 import type {
+  IViewPluginUpdateStorageRo,
   IGetViewFilterLinkRecordsVo,
   IUpdateOrderRo,
   IUpdateRecordOrdersRo,
+  IViewInstallPluginRo,
   IViewShareMetaRo,
 } from '@teable/openapi';
 import { Knex } from 'knex';
+import { keyBy, pick } from 'lodash';
 import { InjectModel } from 'nest-knexjs';
+import { ClsService } from 'nestjs-cls';
+import { IThresholdConfig, ThresholdConfig } from '../../../configs/threshold.config';
+import { CustomHttpException } from '../../../custom.exception';
 import { InjectDbProvider } from '../../../db-provider/db.provider';
 import { IDbProvider } from '../../../db-provider/db.provider.interface';
+import { EventEmitterService } from '../../../event-emitter/event-emitter.service';
+import { Events } from '../../../event-emitter/events';
+import type { IClsStore } from '../../../types/cls';
 import { Timing } from '../../../utils/timing';
 import { updateMultipleOrders, updateOrder } from '../../../utils/update-order';
+import { FieldViewSyncService } from '../../field/field-calculate/field-view-sync.service';
 import { FieldService } from '../../field/field.service';
 import type { IFieldInstance } from '../../field/model/factory';
 import { createFieldInstanceByRaw, createFieldInstanceByVo } from '../../field/model/factory';
 import { RecordService } from '../../record/record.service';
+import { createViewInstanceByRaw } from '../model/factory';
 import { ViewService } from '../view.service';
 
 @Injectable()
@@ -55,20 +71,45 @@ export class ViewOpenApiService {
     private readonly recordService: RecordService,
     private readonly viewService: ViewService,
     private readonly fieldService: FieldService,
+    private readonly fieldViewSyncService: FieldViewSyncService,
+    private readonly eventEmitterService: EventEmitterService,
+    private readonly cls: ClsService<IClsStore>,
     @InjectDbProvider() private readonly dbProvider: IDbProvider,
-    @InjectModel('CUSTOM_KNEX') private readonly knex: Knex
+    @InjectModel('CUSTOM_KNEX') private readonly knex: Knex,
+    @ThresholdConfig() private readonly thresholdConfig: IThresholdConfig
   ) {}
 
   async createView(tableId: string, viewRo: IViewRo) {
+    if (viewRo.type === ViewType.Plugin) {
+      const res = await this.pluginInstall(tableId, {
+        name: viewRo.name,
+        pluginId: (viewRo.options as IPluginViewOptions).pluginId,
+        shareId: viewRo.shareId,
+        shareMeta: viewRo.shareMeta,
+        enableShare: viewRo.enableShare,
+      });
+      return this.viewService.getViewById(res.viewId);
+    }
     return await this.prismaService.$tx(async () => {
       return this.createViewInner(tableId, viewRo);
     });
   }
 
-  async deleteView(tableId: string, viewId: string) {
-    return await this.prismaService.$tx(async () => {
+  async deleteView(tableId: string, viewId: string, windowId?: string) {
+    const result = await this.prismaService.$tx(async () => {
+      await this.fieldViewSyncService.deleteLinkOptionsDependenciesByViewId(tableId, viewId);
       return await this.deleteViewInner(tableId, viewId);
     });
+
+    this.eventEmitterService.emitAsync(Events.OPERATION_VIEW_DELETE, {
+      operationId: generateOperationId(),
+      windowId,
+      tableId,
+      viewId,
+      userId: this.cls.get('user.id'),
+    });
+
+    return result;
   }
 
   private async createViewInner(tableId: string, viewRo: IViewRo): Promise<IViewVo> {
@@ -76,7 +117,7 @@ export class ViewOpenApiService {
   }
 
   private async deleteViewInner(tableId: string, viewId: string) {
-    await this.viewService.deleteView(tableId, viewId);
+    return await this.viewService.deleteView(tableId, viewId);
   }
 
   private updateRecordOrderSql(orderRawSql: string, dbTableName: string, indexField: string) {
@@ -116,7 +157,7 @@ export class ViewOpenApiService {
     );
 
     const orderRawSql = this.dbProvider
-      .sortQuery(queryBuilder, fieldInsMap, sortObjs)
+      .sortQuery(queryBuilder, fieldInsMap, sortObjs, undefined, undefined)
       .getRawSortSQLText();
 
     // build ops
@@ -125,15 +166,25 @@ export class ViewOpenApiService {
       manualSort: true,
     };
 
-    await this.prismaService.$tx(async (prisma) => {
-      await prisma.$executeRawUnsafe(
-        this.updateRecordOrderSql(orderRawSql, dbTableName, indexField)
-      );
-      await this.viewService.updateViewSort(tableId, viewId, newSort);
-    });
+    await this.prismaService.$tx(
+      async (prisma) => {
+        await prisma.$executeRawUnsafe(
+          this.updateRecordOrderSql(orderRawSql, dbTableName, indexField)
+        );
+        await this.viewService.updateViewSort(tableId, viewId, newSort);
+      },
+      {
+        timeout: this.thresholdConfig.bigTransactionTimeout,
+      }
+    );
   }
 
-  async updateViewColumnMeta(tableId: string, viewId: string, columnMetaRo: IColumnMetaRo) {
+  async updateViewColumnMeta(
+    tableId: string,
+    viewId: string,
+    columnMetaRo: IColumnMetaRo,
+    windowId?: string
+  ) {
     const view = await this.prismaService.view
       .findFirstOrThrow({
         where: { tableId, id: viewId },
@@ -145,7 +196,15 @@ export class ViewOpenApiService {
         },
       })
       .catch(() => {
-        throw new BadRequestException('view found column meta error');
+        throw new CustomHttpException(
+          `View not found with id: ${viewId} and tableId: ${tableId}`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.notFound',
+            },
+          }
+        );
       });
 
     // validate field legal
@@ -164,7 +223,19 @@ export class ViewOpenApiService {
     const fieldIds = columnMetaRo.map(({ fieldId }) => fieldId);
 
     if (!fieldIds.every((id) => fields.map(({ id }) => id).includes(id))) {
-      throw new BadRequestException('field is not found in table');
+      throw new CustomHttpException(
+        `Fields ${fieldIds.join(', ')} not found in table ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.field.notFoundInTable',
+            context: {
+              fieldIds: fieldIds.join(', '),
+              tableId,
+            },
+          },
+        }
+      );
     }
 
     const allowHiddenPrimaryType = [ViewType.Calendar, ViewType.Form];
@@ -173,7 +244,15 @@ export class ViewOpenApiService {
      * only form view or list view(todo) can hidden primary field
      */
     if (isHiddenPrimaryField && !allowHiddenPrimaryType.includes(view.type as ViewType)) {
-      throw new ForbiddenException('primary field can not be hidden');
+      throw new CustomHttpException(
+        `Primary field can not be hidden for view type ${view.type}`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.primaryFieldCannotBeHidden',
+          },
+        }
+      );
     }
 
     const curColumnMeta = JSON.parse(view.columnMeta);
@@ -187,36 +266,113 @@ export class ViewOpenApiService {
       };
       ops.push(ViewOpBuilder.editor.updateViewColumnMeta.build(obj));
     });
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, ops);
-    });
+
+    await this.updateViewByOps(tableId, viewId, ops);
+
+    if (windowId) {
+      this.eventEmitterService.emitAsync(Events.OPERATION_VIEW_UPDATE, {
+        tableId,
+        windowId,
+        viewId,
+        userId: this.cls.get('user.id'),
+        byOps: ops,
+      });
+    }
   }
 
   async updateShareMeta(tableId: string, viewId: string, viewShareMetaRo: IViewShareMetaRo) {
-    const curView = await this.prismaService.view
-      .findFirstOrThrow({
-        select: { type: true },
-        where: { tableId, id: viewId, deletedTime: null },
-      })
-      .catch(() => {
-        throw new BadRequestException('View not found');
+    return this.setViewProperty(tableId, viewId, 'shareMeta', viewShareMetaRo);
+  }
+
+  async validateFilter(tableId: string, filter: IFilter) {
+    const fieldIds = extractFieldIdsFromFilter(filter);
+    if (fieldIds.length > 0) {
+      const fields = await this.prismaService.field.findMany({
+        where: { tableId, id: { in: fieldIds } },
+        select: { id: true, type: true },
       });
 
-    // allow copy view type
-    if (
-      'allowCopy' in viewShareMetaRo &&
-      ![ViewType.Grid, ViewType.Gantt].includes(curView.type as ViewType)
-    ) {
-      throw new BadRequestException(`View type(${curView.type}) not support copy`);
+      // Check for unsupported Button type fields
+      const unsupportedFields = fields.filter((f) => f.type === FieldType.Button);
+      if (unsupportedFields.length > 0) {
+        throw new CustomHttpException(
+          `Filter fields ${unsupportedFields.map((f) => f.id).join(', ')} are unsupported ${FieldType.Button} type fields`,
+          HttpErrorCode.VALIDATION_ERROR,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.filterUnsupportedFieldType',
+            },
+          }
+        );
+      }
+
+      // Validate operator + mode compatibility for date fields
+      const fieldTypeMap = fields.reduce(
+        (acc, f) => {
+          acc[f.id] = f.type as FieldType;
+          return acc;
+        },
+        {} as Record<string, FieldType>
+      );
+      const validationErrors = validateFilterOperatorModeCompatibility(filter, fieldTypeMap);
+      if (validationErrors.length > 0) {
+        throw new CustomHttpException(validationErrors[0].message, HttpErrorCode.VALIDATION_ERROR, {
+          localization: {
+            i18nKey: 'httpErrors.view.filterInvalidOperatorMode',
+          },
+        });
+      }
     }
-    return await this.setViewProperty(tableId, viewId, 'shareMeta', viewShareMetaRo);
+  }
+
+  async validateSort(tableId: string, sort: ISort) {
+    const fieldIds = sort?.sortObjs?.map(({ fieldId }) => fieldId) || [];
+    if (fieldIds.length > 0) {
+      const unsupportedFields = await this.prismaService.field.findMany({
+        where: { tableId, id: { in: fieldIds }, type: FieldType.Button },
+        select: { id: true },
+      });
+      if (unsupportedFields.length > 0) {
+        throw new CustomHttpException(
+          `Sort fields ${unsupportedFields.map((f) => f.id).join(', ')} are unsupported ${FieldType.Button} type fields`,
+          HttpErrorCode.VALIDATION_ERROR,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.sortUnsupportedFieldType',
+            },
+          }
+        );
+      }
+    }
+  }
+
+  async validateGroup(tableId: string, group: IGroup) {
+    const fieldIds = group?.map(({ fieldId }) => fieldId) || [];
+    if (fieldIds.length > 0) {
+      const unsupportedFields = await this.prismaService.field.findMany({
+        where: { tableId, id: { in: fieldIds }, type: FieldType.Button },
+        select: { id: true },
+      });
+      if (unsupportedFields.length > 0) {
+        throw new CustomHttpException(
+          `Group fields ${unsupportedFields.map((f) => f.id).join(', ')} are unsupported ${FieldType.Button} type fields`,
+          HttpErrorCode.VALIDATION_ERROR,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.groupUnsupportedFieldType',
+            },
+          }
+        );
+      }
+    }
   }
 
   async setViewProperty(
     tableId: string,
     viewId: string,
     key: IViewPropertyKeys,
-    newValue: unknown
+    newValue: unknown,
+    windowId?: string
   ) {
     const curView = await this.prismaService.view
       .findFirstOrThrow({
@@ -224,8 +380,29 @@ export class ViewOpenApiService {
         where: { tableId, id: viewId, deletedTime: null },
       })
       .catch(() => {
-        throw new BadRequestException('View not found');
+        throw new CustomHttpException(
+          `View not found with id: ${viewId} and tableId: ${tableId}`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.notFound',
+            },
+          }
+        );
       });
+
+    if (key === 'filter') {
+      await this.validateFilter(tableId, newValue as IFilter);
+    }
+
+    if (key === 'sort') {
+      await this.validateSort(tableId, newValue as ISort);
+    }
+
+    if (key === 'group') {
+      await this.validateGroup(tableId, newValue as IGroup);
+    }
+
     const oldValue =
       curView[key] != null && VIEW_JSON_KEYS.includes(key)
         ? JSON.parse(curView[key])
@@ -235,19 +412,51 @@ export class ViewOpenApiService {
       newValue,
       oldValue,
     });
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, [ops]);
+
+    await this.updateViewByOps(tableId, viewId, [ops]);
+
+    if (windowId) {
+      this.eventEmitterService.emitAsync(Events.OPERATION_VIEW_UPDATE, {
+        tableId,
+        windowId,
+        viewId,
+        userId: this.cls.get('user.id'),
+        byKey: {
+          key,
+          newValue,
+          oldValue,
+        },
+      });
+    }
+  }
+
+  async updateViewByOps(tableId: string, viewId: string, ops: IOtOperation[]) {
+    return await this.prismaService.$tx(async () => {
+      return await this.viewService.updateViewByOps(tableId, viewId, ops);
     });
   }
 
-  async patchViewOptions(tableId: string, viewId: string, viewOptions: IViewOptions) {
+  async patchViewOptions(
+    tableId: string,
+    viewId: string,
+    viewOptions: IViewOptions,
+    windowId?: string
+  ) {
     const curView = await this.prismaService.view
       .findFirstOrThrow({
         select: { options: true, type: true },
         where: { tableId, id: viewId, deletedTime: null },
       })
       .catch(() => {
-        throw new BadRequestException('View option not found');
+        throw new CustomHttpException(
+          `View not found with id: ${viewId} and tableId: ${tableId}`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.notFound',
+            },
+          }
+        );
       });
     const { options, type: viewType } = curView;
 
@@ -255,11 +464,19 @@ export class ViewOpenApiService {
     try {
       validateOptionsType(viewType as ViewType, viewOptions);
     } catch (err) {
-      throw new BadRequestException(err);
+      throw new CustomHttpException(
+        `View option parse error: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.propertyParseError',
+          },
+        }
+      );
     }
 
     const oldOptions = options ? JSON.parse(options) : options;
-    const ops = ViewOpBuilder.editor.setViewProperty.build({
+    const op = ViewOpBuilder.editor.setViewProperty.build({
       key: 'options',
       newValue: {
         ...oldOptions,
@@ -267,9 +484,17 @@ export class ViewOpenApiService {
       },
       oldValue: oldOptions,
     });
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, [ops]);
-    });
+    await this.updateViewByOps(tableId, viewId, [op]);
+
+    if (windowId) {
+      this.eventEmitterService.emitAsync(Events.OPERATION_VIEW_UPDATE, {
+        tableId,
+        windowId,
+        viewId,
+        userId: this.cls.get('user.id'),
+        byOps: [op],
+      });
+    }
   }
 
   /**
@@ -285,20 +510,27 @@ export class ViewOpenApiService {
     this.logger.log(`lucky view shuffle! ${tableId}`, 'shuffle');
 
     await this.prismaService.$tx(async () => {
+      const opsMap: { [viewId: string]: IOtOperation[] } = {};
       for (let i = 0; i < views.length; i++) {
         const view = views[i];
-        await this.viewService.updateViewByOps(tableId, view.id, [
+        opsMap[view.id] = [
           ViewOpBuilder.editor.setViewProperty.build({
             key: 'order',
             newValue: i,
             oldValue: view.order,
           }),
-        ]);
+        ];
       }
+      await this.viewService.batchUpdateViewByOps(tableId, opsMap);
     });
   }
 
-  async updateViewOrder(tableId: string, viewId: string, orderRo: IUpdateOrderRo) {
+  async updateViewOrder(
+    tableId: string,
+    viewId: string,
+    orderRo: IUpdateOrderRo,
+    windowId?: string
+  ) {
     const { anchorId, position } = orderRo;
 
     const view = await this.prismaService.view
@@ -307,7 +539,15 @@ export class ViewOpenApiService {
         where: { tableId, id: viewId, deletedTime: null },
       })
       .catch(() => {
-        throw new NotFoundException(`View ${viewId} not found in the table`);
+        throw new CustomHttpException(
+          `View not found with id: ${viewId} and tableId: ${tableId}`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.notFound',
+            },
+          }
+        );
       });
 
     const anchorView = await this.prismaService.view
@@ -316,7 +556,15 @@ export class ViewOpenApiService {
         where: { tableId, id: anchorId, deletedTime: null },
       })
       .catch(() => {
-        throw new NotFoundException(`Anchor ${anchorId} not found in the table`);
+        throw new CustomHttpException(
+          `Anchor not found with id: ${anchorId} and tableId: ${tableId}`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.view.anchorNotFound',
+            },
+          }
+        );
       });
 
     await updateOrder({
@@ -340,15 +588,22 @@ export class ViewOpenApiService {
         id: string,
         data: { newOrder: number; oldOrder: number }
       ) => {
-        const ops = ViewOpBuilder.editor.setViewProperty.build({
+        const op = ViewOpBuilder.editor.setViewProperty.build({
           key: 'order',
           newValue: data.newOrder,
           oldValue: data.oldOrder,
         });
+        await this.updateViewByOps(parentId, id, [op]);
 
-        await this.prismaService.$tx(async () => {
-          await this.viewService.updateViewByOps(parentId, id, [ops]);
-        });
+        if (windowId) {
+          this.eventEmitterService.emitAsync(Events.OPERATION_VIEW_UPDATE, {
+            tableId,
+            windowId,
+            viewId,
+            userId: this.cls.get('user.id'),
+            byOps: [op],
+          });
+        }
       },
       shuffle: this.shuffle.bind(this),
     });
@@ -360,7 +615,15 @@ export class ViewOpenApiService {
   async shuffleRecords(dbTableName: string, indexField: string) {
     const recordCount = await this.recordService.getAllRecordCount(dbTableName);
     if (recordCount > 100_000) {
-      throw new BadRequestException('Not enough gap to move the row here');
+      throw new CustomHttpException(
+        `Not enough gap to shuffle the row here, record count: ${recordCount}`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.notEnoughGapToShuffleRow',
+          },
+        }
+      );
     }
 
     const sql = this.updateRecordOrderSql(
@@ -372,6 +635,7 @@ export class ViewOpenApiService {
     await this.prismaService.$executeRawUnsafe(sql);
   }
 
+  @Timing()
   async updateRecordOrdersInner(props: {
     tableId: string;
     dbTableName: string;
@@ -402,7 +666,15 @@ export class ViewOpenApiService {
       });
 
     if (!anchorRecord) {
-      throw new NotFoundException(`Anchor ${anchorId} not found in the table`);
+      throw new CustomHttpException(
+        `Anchor not found with id: ${anchorId} and tableId: ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.anchorNotFound',
+          },
+        }
+      );
     }
 
     await updateMultipleOrders({
@@ -438,14 +710,41 @@ export class ViewOpenApiService {
     });
   }
 
-  async updateRecordOrders(tableId: string, viewId: string, orderRo: IUpdateRecordOrdersRo) {
-    const dbTableName = await this.recordService.getDbTableName(tableId);
+  async updateRecordIndexes(
+    tableId: string,
+    viewId: string,
+    recordsWithOrder: {
+      id: string;
+      order?: Record<string, number>;
+    }[]
+  ) {
+    // for notify view update only
+    await this.prismaService.$tx(async () => {
+      const ops = ViewOpBuilder.editor.setViewProperty.build({
+        key: 'lastModifiedTime',
+        newValue: new Date().toISOString(),
+      });
+      await this.viewService.updateViewByOps(tableId, viewId, [ops]);
+      await this.recordService.updateRecordIndexes(tableId, recordsWithOrder);
+    });
+  }
+
+  async updateRecordOrders(
+    table: TableDomain,
+    viewId: string,
+    orderRo: IUpdateRecordOrdersRo,
+    windowId?: string
+  ) {
+    const recordIds = orderRo.recordIds;
+    const dbTableName = table.dbTableName;
+    const orderIndexesBefore = windowId
+      ? await this.recordService.getRecordIndexes(table, recordIds, viewId)
+      : undefined;
 
     const indexField = await this.viewService.getOrCreateViewIndexField(dbTableName, viewId);
-    const recordIds = orderRo.recordIds;
 
     await this.updateRecordOrdersInner({
-      tableId,
+      tableId: table.id,
       dbTableName,
       itemLength: recordIds.length,
       indexField,
@@ -458,7 +757,7 @@ export class ViewOpenApiService {
         });
 
         await this.prismaService.$tx(async (prisma) => {
-          await this.viewService.updateViewByOps(tableId, viewId, [ops]);
+          await this.viewService.updateViewByOps(table.id, viewId, [ops]);
           for (let i = 0; i < recordIds.length; i++) {
             const recordId = recordIds[i];
             const updateRecordSql = this.knex(dbTableName)
@@ -472,6 +771,19 @@ export class ViewOpenApiService {
         });
       },
     });
+
+    if (windowId) {
+      const orderIndexesAfter = await this.recordService.getRecordIndexes(table, recordIds, viewId);
+      this.eventEmitterService.emitAsync(Events.OPERATION_RECORDS_ORDER_UPDATE, {
+        tableId: table.id,
+        windowId,
+        recordIds,
+        viewId,
+        userId: this.cls.get('user.id'),
+        orderIndexesBefore,
+        orderIndexesAfter,
+      });
+    }
   }
 
   async refreshShareId(tableId: string, viewId: string) {
@@ -480,11 +792,27 @@ export class ViewOpenApiService {
       select: { shareId: true, enableShare: true },
     });
     if (!view) {
-      throw new NotFoundException(`View ${viewId} does not exist`);
+      throw new CustomHttpException(
+        `View not found with id: ${viewId} and tableId: ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.notFound',
+          },
+        }
+      );
     }
     const { enableShare } = view;
     if (!enableShare) {
-      throw new BadRequestException(`View ${viewId} has not been enabled share`);
+      throw new CustomHttpException(
+        `View ${viewId} has not been enabled share`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.shareNotEnabled',
+          },
+        }
+      );
     }
     const newShareId = generateShareId();
     const setShareIdOp = ViewOpBuilder.editor.setViewProperty.build({
@@ -492,23 +820,36 @@ export class ViewOpenApiService {
       newValue: newShareId,
       oldValue: view.shareId || undefined,
     });
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, [setShareIdOp]);
-    });
+    await this.updateViewByOps(tableId, viewId, [setShareIdOp]);
     return { shareId: newShareId };
   }
 
   async enableShare(tableId: string, viewId: string) {
     const view = await this.prismaService.view.findUnique({
       where: { id: viewId, tableId, deletedTime: null },
-      select: { shareId: true, enableShare: true },
     });
     if (!view) {
-      throw new NotFoundException(`View ${viewId} does not exist`);
+      throw new CustomHttpException(
+        `View not found with id: ${viewId} and tableId: ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.notFound',
+          },
+        }
+      );
     }
     const { enableShare, shareId } = view;
     if (enableShare) {
-      throw new BadRequestException(`View ${viewId} has already been enabled share`);
+      throw new CustomHttpException(
+        `View ${viewId} has already been enabled share`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.shareAlreadyEnabled',
+          },
+        }
+      );
     }
     const newShareId = generateShareId();
     const enableShareOp = ViewOpBuilder.editor.setViewProperty.build({
@@ -521,9 +862,18 @@ export class ViewOpenApiService {
       newValue: newShareId,
       oldValue: shareId || undefined,
     });
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, [enableShareOp, setShareIdOp]);
-    });
+
+    const ops = [enableShareOp, setShareIdOp];
+
+    const viewInstance = createViewInstanceByRaw(view);
+    if (!view.shareMeta && viewInstance.defaultShareMeta) {
+      const initShareMetaOp = ViewOpBuilder.editor.setViewProperty.build({
+        key: 'shareMeta',
+        newValue: viewInstance.defaultShareMeta,
+      });
+      ops.push(initShareMetaOp);
+    }
+    await this.updateViewByOps(tableId, viewId, ops);
     return { shareId: newShareId };
   }
 
@@ -533,11 +883,27 @@ export class ViewOpenApiService {
       select: { shareId: true, enableShare: true, shareMeta: true },
     });
     if (!view) {
-      throw new NotFoundException(`View ${viewId} does not exist`);
+      throw new CustomHttpException(
+        `View not found with id: ${viewId} and tableId: ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.notFound',
+          },
+        }
+      );
     }
     const { enableShare } = view;
     if (!enableShare) {
-      throw new BadRequestException(`View ${viewId} has already been disable share`);
+      throw new CustomHttpException(
+        `View ${viewId} has already been disable share`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.view.shareAlreadyDisabled',
+          },
+        }
+      );
     }
     const enableShareOp = ViewOpBuilder.editor.setViewProperty.build({
       key: 'enableShare',
@@ -545,19 +911,14 @@ export class ViewOpenApiService {
       oldValue: enableShare || undefined,
     });
 
-    await this.prismaService.$tx(async () => {
-      await this.viewService.updateViewByOps(tableId, viewId, [enableShareOp]);
-    });
+    await this.updateViewByOps(tableId, viewId, [enableShareOp]);
   }
 
   /**
    * @param linkFields {fieldId: foreignTableId}
    * @returns {foreignTableId: Set<recordId>}
    */
-  private async collectFilterLinkFieldRecords(
-    linkFields: Record<string, string>,
-    filter?: IFilter
-  ) {
+  private collectFilterLinkFieldRecords(linkFields: Record<string, string>, filter?: IFilter) {
     if (!filter || !filter.filterSet) {
       return undefined;
     }
@@ -573,7 +934,7 @@ export class ViewOpenApiService {
 
     for (const filterItem of filter.filterSet) {
       if ('filterSet' in filterItem) {
-        const groupTableRecordMap = await this.collectFilterLinkFieldRecords(
+        const groupTableRecordMap = this.collectFilterLinkFieldRecords(
           linkFields,
           filterItem as IFilter
         );
@@ -612,30 +973,48 @@ export class ViewOpenApiService {
     const linkFields = await this.prismaService.field.findMany({
       where: { tableId, deletedTime: null, type: FieldType.Link },
     });
+
+    const linkFieldInstances = linkFields.map((field) => createFieldInstanceByRaw(field));
+
+    const lookupFieldIds = linkFieldInstances.reduce((arr, field) => {
+      const { lookupFieldId } = field.options as ILinkFieldOptions;
+      if (lookupFieldId) {
+        arr.push(lookupFieldId);
+      }
+      return arr;
+    }, [] as string[]);
+
     const linkFieldTableMap = linkFields.reduce(
       (map, field) => {
         const { foreignTableId } = JSON.parse(field.options as string) as ILinkFieldOptions;
-        map[field.id] = foreignTableId;
+        if (foreignTableId) {
+          map[field.id] = foreignTableId;
+        }
         return map;
       },
       {} as Record<string, string>
     );
-    const tableRecordMap = await this.collectFilterLinkFieldRecords(linkFieldTableMap, filter);
+
+    const tableRecordMap = this.collectFilterLinkFieldRecords(linkFieldTableMap, filter);
 
     if (!tableRecordMap) {
       return [];
     }
+
+    const lookupFieldRaws = await this.prismaService.field.findMany({
+      where: { id: { in: lookupFieldIds }, deletedTime: null },
+    });
+    const lookupFieldRawsMap = keyBy(lookupFieldRaws, 'tableId');
+
     const res: IGetViewFilterLinkRecordsVo = [];
     for (const [foreignTableId, recordSet] of Object.entries(tableRecordMap)) {
       const dbTableName = await this.recordService.getDbTableName(foreignTableId);
-      const primaryField = await this.prismaService.field.findFirst({
-        where: { tableId: foreignTableId, isPrimary: true, deletedTime: null },
-      });
-      if (!primaryField) {
+
+      const lookupedFieldRaw = lookupFieldRawsMap[foreignTableId];
+      if (!lookupedFieldRaw) {
         continue;
       }
-
-      const dbFieldName = primaryField.dbFieldName;
+      const dbFieldName = lookupedFieldRaw.dbFieldName;
 
       const nativeQuery = this.knex(dbTableName)
         .select('__id as id', `${dbFieldName} as title`)
@@ -646,7 +1025,7 @@ export class ViewOpenApiService {
       const list = await this.prismaService
         .txClient()
         .$queryRawUnsafe<{ id: string; title: string | null }[]>(nativeQuery);
-      const fieldInstances = createFieldInstanceByRaw(primaryField);
+      const fieldInstances = createFieldInstanceByRaw(lookupedFieldRaw);
       res.push({
         tableId: foreignTableId,
         records: list.map(({ id, title }) => ({
@@ -658,5 +1037,195 @@ export class ViewOpenApiService {
       });
     }
     return res;
+  }
+
+  async pluginInstall(
+    tableId: string,
+    ro: IViewInstallPluginRo & {
+      shareId?: string;
+      shareMeta?: IViewShareMetaRo;
+      enableShare?: boolean;
+    }
+  ) {
+    const userId = this.cls.get('user.id');
+    const { name, pluginId, shareId, shareMeta, enableShare } = ro;
+    const plugin = await this.prismaService.txClient().plugin.findUnique({
+      where: {
+        id: pluginId,
+        OR: [
+          {
+            status: PluginStatus.Published,
+          },
+          {
+            status: { not: PluginStatus.Published },
+            createdBy: this.cls.get('user.id'),
+          },
+        ],
+      },
+      select: { id: true, name: true, logo: true, positions: true },
+    });
+    if (!plugin) {
+      throw new CustomHttpException(
+        `Plugin not found with id: ${pluginId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.plugin.notFound',
+          },
+        }
+      );
+    }
+    if (!plugin.positions.includes(PluginPosition.View)) {
+      throw new CustomHttpException(
+        `Plugin ${pluginId} does not support install in view`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.plugin.notSupportInstallInView',
+          },
+        }
+      );
+    }
+    const viewName = name || plugin.name;
+    return this.prismaService.$tx(async (prisma) => {
+      const pluginInstallId = generatePluginInstallId();
+      const view = await this.createViewInner(tableId, {
+        name: viewName,
+        type: ViewType.Plugin,
+        enableShare,
+        shareMeta,
+        shareId,
+        options: {
+          pluginInstallId,
+          pluginId,
+          pluginLogo: plugin.logo,
+        } as IPluginViewOptions,
+      });
+      const table = await prisma.tableMeta.findUniqueOrThrow({
+        where: { id: tableId, deletedTime: null },
+        select: { baseId: true },
+      });
+      const newPlugin = await prisma.pluginInstall.create({
+        data: {
+          id: pluginInstallId,
+          baseId: table?.baseId,
+          positionId: view.id,
+          position: PluginPosition.View,
+          name: viewName,
+          pluginId: ro.pluginId,
+          createdBy: userId,
+        },
+      });
+      return {
+        pluginId: newPlugin.pluginId,
+        pluginInstallId: newPlugin.id,
+        name: newPlugin.name,
+        viewId: view.id,
+      };
+    });
+  }
+
+  async updatePluginStorage(viewId: string, storage: IViewPluginUpdateStorageRo['storage']) {
+    const pluginInstall = await this.prismaService.pluginInstall.findFirst({
+      where: { positionId: viewId, position: PluginPosition.View },
+      select: { id: true },
+    });
+    if (!pluginInstall) {
+      throw new CustomHttpException(
+        `Plugin install not found with viewId: ${viewId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.plugin.notFound',
+          },
+        }
+      );
+    }
+    return this.prismaService.pluginInstall.update({
+      where: { id: pluginInstall.id },
+      data: { storage: JSON.stringify(storage) },
+    });
+  }
+
+  async getPluginInstall(tableId: string, viewId: string) {
+    const table = await this.prismaService.tableMeta.findUniqueOrThrow({
+      where: { id: tableId, deletedTime: null },
+      select: { baseId: true },
+    });
+    const pluginInstall = await this.prismaService.pluginInstall.findFirst({
+      where: { positionId: viewId, position: PluginPosition.View },
+      select: {
+        id: true,
+        pluginId: true,
+        name: true,
+        storage: true,
+        plugin: {
+          select: { url: true },
+        },
+      },
+    });
+    if (!pluginInstall) {
+      throw new CustomHttpException(
+        `Plugin install not found with viewId: ${viewId} and tableId: ${tableId}`,
+        HttpErrorCode.NOT_FOUND,
+        {
+          localization: {
+            i18nKey: 'httpErrors.plugin.notFound',
+          },
+        }
+      );
+    }
+    return {
+      name: pluginInstall.name,
+      pluginId: pluginInstall.pluginId,
+      pluginInstallId: pluginInstall.id,
+      storage: pluginInstall.storage ? JSON.parse(pluginInstall.storage) : undefined,
+      baseId: table.baseId,
+      url: pluginInstall.plugin.url || undefined,
+    };
+  }
+
+  async duplicateView(tableId: string, viewId: string) {
+    const view = await this.viewService.getViewById(viewId);
+    const { options: optionsRaw } = await this.prismaService.txClient().view.findUniqueOrThrow({
+      where: { id: viewId, deletedTime: null },
+      select: { options: true },
+    });
+    const options = optionsRaw ? JSON.parse(optionsRaw) : undefined;
+    return this.prismaService.$tx(async (prisma) => {
+      const viewVo = await this.createView(tableId, {
+        ...pick(view, [
+          'name',
+          'type',
+          'description',
+          'filter',
+          'group',
+          'columnMeta',
+          'sort',
+          'enableShare',
+          'shareMeta',
+          'shareId',
+          'isLocked',
+        ]),
+        options,
+        shareId: view.shareId ? generateShareId() : undefined,
+      });
+
+      if (view.type === ViewType.Plugin) {
+        const originPluginInstallId = (view.options as IPluginViewOptions)?.pluginInstallId;
+        const newPluginInstallId = (viewVo.options as IPluginViewOptions)?.pluginInstallId;
+        const { storage: pluginStorage } = await prisma.pluginInstall.findUniqueOrThrow({
+          where: { id: originPluginInstallId },
+          select: { storage: true },
+        });
+
+        await prisma.pluginInstall.update({
+          where: { id: newPluginInstallId },
+          data: { storage: pluginStorage },
+        });
+      }
+
+      return viewVo;
+    });
   }
 }

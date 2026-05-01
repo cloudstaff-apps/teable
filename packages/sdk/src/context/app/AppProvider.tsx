@@ -1,14 +1,13 @@
-import { Hydrate, QueryClientProvider } from '@tanstack/react-query';
+import type { DehydratedState } from '@tanstack/react-query';
 import { ThemeProvider } from '@teable/next-themes';
+import type { IGetBaseVo } from '@teable/openapi';
 import { isObject, merge } from 'lodash';
 import { useMemo } from 'react';
 import { AppContext } from '../app/AppContext';
+import { ConnectionProvider } from './ConnectionProvider';
 import type { ILocalePartial } from './i18n';
 import { defaultLocale } from './i18n';
-import { createQueryClient } from './queryClient';
-import { useConnection } from './useConnection';
-
-const queryClient = createQueryClient();
+import { QueryClientProvider } from './QueryClientProvider';
 
 interface IAppProviderProps {
   forcedTheme?: string;
@@ -16,30 +15,54 @@ interface IAppProviderProps {
   wsPath?: string;
   lang?: string;
   locale?: ILocalePartial;
-  dehydratedState?: unknown;
+  dehydratedState?: DehydratedState;
+  disabledWs?: boolean;
+  template?: IGetBaseVo['template'];
+  shareId?: string;
+  maxSearchFieldCount?: number;
 }
 
 export const AppProvider = (props: IAppProviderProps) => {
-  const { forcedTheme, children, wsPath, lang, locale, dehydratedState } = props;
-
-  const { connected, connection } = useConnection(wsPath);
-
-  const value = useMemo(() => {
-    return {
-      connection,
-      connected,
+  const {
+    forcedTheme,
+    children,
+    wsPath,
+    lang,
+    locale,
+    disabledWs,
+    dehydratedState,
+    template,
+    shareId,
+    maxSearchFieldCount,
+  } = props;
+  const value = useMemo(
+    () => ({
       lang,
       locale: isObject(locale) ? merge(defaultLocale, locale) : defaultLocale,
-    };
-  }, [connection, connected, lang, locale]);
+      template,
+      shareId,
+      maxSearchFieldCount,
+    }),
+    [lang, locale, template, shareId, maxSearchFieldCount]
+  );
+
+  if (disabledWs) {
+    return (
+      <ThemeProvider attribute="class" forcedTheme={forcedTheme}>
+        <AppContext.Provider value={value}>
+          <QueryClientProvider dehydratedState={dehydratedState}>{children}</QueryClientProvider>
+        </AppContext.Provider>
+      </ThemeProvider>
+    );
+  }
 
   // forcedTheme is not work as expected https://github.com/pacocoursey/next-themes/issues/252
   return (
     <ThemeProvider attribute="class" forcedTheme={forcedTheme}>
       <AppContext.Provider value={value}>
-        <QueryClientProvider client={queryClient}>
-          <Hydrate state={dehydratedState}>{children}</Hydrate>
-        </QueryClientProvider>
+        <ConnectionProvider wsPath={wsPath}>
+          <QueryClientProvider dehydratedState={dehydratedState}>{children}</QueryClientProvider>
+        </ConnectionProvider>
       </AppContext.Provider>
     </ThemeProvider>
   );

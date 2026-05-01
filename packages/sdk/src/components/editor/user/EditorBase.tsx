@@ -10,8 +10,17 @@ import {
   Skeleton,
   cn,
 } from '@teable/ui-lib';
+import { debounce } from 'lodash';
 import type { ForwardRefRenderFunction } from 'react';
-import { useCallback, useImperativeHandle, useRef, forwardRef } from 'react';
+import {
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  forwardRef,
+  useState,
+  useEffect,
+  useMemo,
+} from 'react';
 import { useTranslation } from '../../../context/app/i18n';
 import type { ICellEditor, IEditorRef } from '../type';
 import type { ICollaborator } from './types';
@@ -21,8 +30,10 @@ export interface IUserEditorBaseProps extends ICellEditor<IUserCellValue | IUser
   isMultiple?: boolean;
   onChange?: (value?: IUserCellValue | IUserCellValue[]) => void;
   className?: string;
+  onSearch?: (value: string) => void;
   collaborators?: ICollaborator[];
   isLoading?: boolean;
+  initialSearch?: string;
 }
 
 export type IUserEditorRef = IEditorRef<IUserCellValue | IUserCellValue[] | undefined>;
@@ -39,9 +50,14 @@ const UserEditorBaseRef: ForwardRefRenderFunction<IUserEditorRef, IUserEditorBas
     isMultiple,
     collaborators,
     onChange,
+    onSearch,
+    initialSearch,
   } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { t } = useTranslation();
+  const [search, setSearch] = useState(initialSearch ?? '');
+  const [isComposing, setIsComposing] = useState(false);
+  const [highlightedUserId, setHighlightedUserId] = useState('');
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -72,9 +88,45 @@ const UserEditorBaseRef: ForwardRefRenderFunction<IUserEditorRef, IUserEditorBas
     [cellValue, isMultiple]
   );
 
+  const setApplySearchDebounced = useMemo(() => {
+    return onSearch ? debounce(onSearch, 200) : undefined;
+  }, [onSearch]);
+
+  useEffect(() => {
+    if (!isComposing) {
+      setApplySearchDebounced?.(search);
+    }
+  }, [search, isComposing, onSearch, setApplySearchDebounced]);
+
+  useEffect(() => {
+    if (isMultiple) return;
+
+    if (!collaborators?.length) {
+      setHighlightedUserId('');
+      return;
+    }
+
+    if (!collaborators.some((collaborator) => collaborator.userId === highlightedUserId)) {
+      setHighlightedUserId(collaborators[0].userId);
+    }
+  }, [collaborators, highlightedUserId, isMultiple]);
+
   return (
-    <Command className={className} style={style}>
-      <CommandInput ref={inputRef} placeholder={t('editor.user.searchPlaceholder')} />
+    <Command
+      className={className}
+      style={style}
+      shouldFilter={false}
+      value={highlightedUserId}
+      onValueChange={setHighlightedUserId}
+    >
+      <CommandInput
+        ref={inputRef}
+        value={search}
+        placeholder={t('editor.user.searchPlaceholder')}
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={() => setIsComposing(false)}
+        onValueChange={(value) => setSearch(value)}
+      />
       <CommandList>
         <CommandEmpty>{t('common.search.empty')}</CommandEmpty>
         <CommandGroup aria-valuetext="name">
@@ -87,7 +139,7 @@ const UserEditorBaseRef: ForwardRefRenderFunction<IUserEditorRef, IUserEditorBas
             collaborators?.map(({ userId, userName, avatar, email }) => (
               <CommandItem
                 key={userId}
-                value={userName}
+                value={userId}
                 onSelect={() => onSelect({ id: userId, title: userName, avatarUrl: avatar, email })}
                 className="flex justify-between"
               >

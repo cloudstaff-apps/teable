@@ -12,10 +12,12 @@ import {
   cn,
 } from '@teable/ui-lib';
 
-import { Check, ChevronsUpDown } from 'lucide-react';
-import { useState, useMemo, useCallback } from 'react';
+import { debounce } from 'lodash';
+import { Check, ChevronDown } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from '../../../../../context/app/i18n';
 import type { IOption, IBaseMultipleSelect } from './types';
+import { scrollListByWheel } from './wheel-scroll-list';
 
 function BaseMultipleSelect<V extends string, O extends IOption<V> = IOption<V>>(
   props: IBaseMultipleSelect<V, O>
@@ -27,12 +29,19 @@ function BaseMultipleSelect<V extends string, O extends IOption<V> = IOption<V>>
     options,
     className,
     popoverClassName,
+    placeholderClassName,
     disabled = false,
     optionRender,
     notFoundText = t('common.noRecords'),
     displayRender,
+    onSearch,
+    modal,
   } = props;
   const [open, setOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [searchValue, setSearchValue] = useState('');
+  const [isComposing, setIsComposing] = useState(false);
+
   const values = useMemo<V[]>(() => {
     if (Array.isArray(value) && value.length) {
       return value;
@@ -68,15 +77,24 @@ function BaseMultipleSelect<V extends string, O extends IOption<V> = IOption<V>>
 
   const commandFilter = useCallback(
     (id: string, searchValue: string) => {
-      const name = optionMap[id]?.toLowerCase();
-      const containWord = name.indexOf(searchValue?.toLowerCase()) > -1;
-      return Number(containWord);
+      const name = optionMap?.[id?.trim()]?.toLowerCase() || '';
+      return name.includes(searchValue?.toLowerCase()?.trim()) ? 1 : 0;
     },
     [optionMap]
   );
 
+  const setApplySearchDebounced = useMemo(() => {
+    return onSearch ? debounce(onSearch, 200) : undefined;
+  }, [onSearch]);
+
+  useEffect(() => {
+    if (!isComposing) {
+      setApplySearchDebounced?.(searchValue);
+    }
+  }, [searchValue, isComposing, onSearch, setApplySearchDebounced]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal={modal}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -86,7 +104,7 @@ function BaseMultipleSelect<V extends string, O extends IOption<V> = IOption<V>>
           disabled={disabled}
           className={cn('justify-between overflow-hidden px-2', className)}
         >
-          <div className="flex shrink gap-1 overflow-auto whitespace-nowrap">
+          <div className="flex shrink gap-1.5 overflow-hidden whitespace-nowrap">
             {selectedValues?.length ? (
               selectedValues?.map(
                 (value, index) =>
@@ -97,20 +115,38 @@ function BaseMultipleSelect<V extends string, O extends IOption<V> = IOption<V>>
                   )
               )
             ) : (
-              <span className="text-xs font-light text-muted-foreground">
+              <span
+                className={cn('text-xs font-normal text-muted-foreground', placeholderClassName)}
+              >
                 {t('common.selectPlaceHolder')}
               </span>
             )}
           </div>
-          <ChevronsUpDown className="ml-2 size-3 shrink-0 opacity-50" />
+          <ChevronDown
+            className={cn(
+              'ml-2 size-4 shrink-0 text-muted-foreground transition-transform duration-200',
+              open && 'rotate-180'
+            )}
+          />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className={cn('p-1', popoverClassName)}>
-        <Command className="rounded-sm" filter={commandFilter}>
-          <CommandList className="mt-1">
+      <PopoverContent
+        align="start"
+        className={cn('p-1', popoverClassName)}
+        onWheelCapture={(event) => scrollListByWheel(event, listRef.current)}
+      >
+        <Command
+          className="rounded-sm"
+          filter={onSearch ? undefined : commandFilter}
+          shouldFilter={!onSearch}
+        >
+          <CommandList ref={listRef} className="mt-1">
             <CommandInput
               placeholder={t('common.search.placeholder')}
               className="placeholder:text-[13px]"
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
+              onValueChange={(value) => setSearchValue(value)}
             />
             <CommandEmpty>{notFoundText}</CommandEmpty>
             <CommandGroup aria-valuetext="name">

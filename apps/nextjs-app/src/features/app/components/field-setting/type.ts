@@ -11,12 +11,12 @@ export interface IFieldSetting {
   order?: number;
   field?: IFieldVo;
   operator: FieldOperator;
-  onConfirm?: () => void;
+  onConfirm?: (field?: IFieldVo) => void;
   onCancel?: () => void;
 }
 
-export type IFieldSettingBase = IFieldSetting & {
-  onConfirm?: (field: IFieldRo) => void;
+export type IFieldSettingBase = Omit<IFieldSetting, 'onConfirm'> & {
+  onConfirm?: (field?: IFieldRo) => void;
 };
 
 export type IFieldEditorRo = Partial<IFieldRo> & {

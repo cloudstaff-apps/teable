@@ -3,16 +3,17 @@
 /* eslint-disable sonarjs/cognitive-complexity */
 import type { INestApplication } from '@nestjs/common';
 import type { IFilter, IOperator } from '@teable/core';
-import { and, FieldKeyType } from '@teable/core';
+import { and, FieldKeyType, FieldType } from '@teable/core';
 import type { ITableFullVo } from '@teable/openapi';
 import { getRecords as apiGetRecords, createField, getFields } from '@teable/openapi';
-import { x_20 } from './data-helpers/20x';
+import { textField, x_20 } from './data-helpers/20x';
 import { x_20_link, x_20_link_from_lookups } from './data-helpers/20x-link';
 import {
   CHECKBOX_FIELD_CASES,
   CHECKBOX_LOOKUP_FIELD_CASES,
   DATE_FIELD_CASES,
   DATE_LOOKUP_FIELD_CASES,
+  DATE_RANGE_ERROR_CASES,
   MULTIPLE_SELECT_FIELD_CASES,
   MULTIPLE_SELECT_LOOKUP_FIELD_CASES,
   MULTIPLE_USER_FIELD_CASES,
@@ -26,13 +27,26 @@ import {
   USER_FIELD_CASES,
   USER_LOOKUP_FIELD_CASES,
 } from './data-helpers/caces/record-filter-query';
-import { createTable, deleteTable, initApp } from './utils/init-app';
+import { createTable, permanentDeleteTable, initApp } from './utils/init-app';
 
 const testDesc = `should filter [$operator], query value: $queryValue, expect result length: $expectResultLength`;
 
 describe('OpenAPI Record-Filter-Query (e2e)', () => {
   let app: INestApplication;
   const baseId = globalThis.testConfig.baseId;
+  const isForceV2 = process.env.FORCE_V2_ALL === 'true';
+  const textLookupFieldCases = isForceV2
+    ? TEXT_LOOKUP_FIELD_CASES.map((testCase) => {
+        switch (testCase.operator) {
+          case 'isEmpty':
+            return { ...testCase, expectResultLength: 6 };
+          case 'isNotEmpty':
+            return { ...testCase, expectResultLength: 15 };
+          default:
+            return testCase;
+        }
+      })
+    : TEXT_LOOKUP_FIELD_CASES;
 
   beforeAll(async () => {
     const appCtx = await initApp();
@@ -84,7 +98,7 @@ describe('OpenAPI Record-Filter-Query (e2e)', () => {
       conjunction,
     };
 
-    const { records } = await getFilterRecord(tableId, viewId, filter);
+    const { records } = await getFilterRecord(tableId, viewId!, filter);
     expect(records.length).toBe(expectResultLength);
     if (!expectMoreResults) {
       expect(records).not.toMatchObject([
@@ -107,7 +121,7 @@ describe('OpenAPI Record-Filter-Query (e2e)', () => {
       });
     });
     afterAll(async () => {
-      await deleteTable(baseId, table.id);
+      await permanentDeleteTable(baseId, table.id);
     });
 
     describe('simple filter text field record', () => {
@@ -142,6 +156,38 @@ describe('OpenAPI Record-Filter-Query (e2e)', () => {
     describe('simple filter multiple select field record', () => {
       test.each(MULTIPLE_SELECT_FIELD_CASES)(testDesc, async (param) => doTest(table, param));
     });
+
+    describe('dateRange filter error cases', () => {
+      it('should throw error when start > end (invalid range)', async () => {
+        const { fieldIndex, operator, queryValue } = DATE_RANGE_ERROR_CASES.invalidRange;
+        const filter: IFilter = {
+          filterSet: [
+            {
+              fieldId: table.fields[fieldIndex].id,
+              value: queryValue,
+              operator,
+            },
+          ],
+          conjunction: and.value,
+        };
+        await expect(getFilterRecord(table.id, table.views[0].id, filter)).rejects.toThrow();
+      });
+
+      it('should throw error when dateRange is used with isNot operator', async () => {
+        const { fieldIndex, operator, queryValue } = DATE_RANGE_ERROR_CASES.invalidOperator;
+        const filter: IFilter = {
+          filterSet: [
+            {
+              fieldId: table.fields[fieldIndex].id,
+              value: queryValue,
+              operator,
+            },
+          ],
+          conjunction: and.value,
+        };
+        await expect(getFilterRecord(table.id, table.views[0].id, filter)).rejects.toThrow();
+      });
+    });
   });
 
   describe('lookup field filter record', () => {
@@ -171,12 +217,12 @@ describe('OpenAPI Record-Filter-Query (e2e)', () => {
     });
 
     afterAll(async () => {
-      await deleteTable(baseId, table.id);
-      await deleteTable(baseId, subTable.id);
+      await permanentDeleteTable(baseId, table.id);
+      await permanentDeleteTable(baseId, subTable.id);
     });
 
     describe('filter lookup text field record', () => {
-      test.each(TEXT_LOOKUP_FIELD_CASES)(testDesc, async (param) => doTest(subTable, param));
+      test.each(textLookupFieldCases)(testDesc, async (param) => doTest(subTable, param));
     });
     describe('filter lookup number field record', () => {
       test.each(NUMBER_LOOKUP_FIELD_CASES)(testDesc, async (param) => doTest(subTable, param));
@@ -213,6 +259,55 @@ describe('OpenAPI Record-Filter-Query (e2e)', () => {
       test.each(MULTIPLE_SELECT_LOOKUP_FIELD_CASES)(testDesc, async (param) =>
         doTest(subTable, param)
       );
+    });
+  });
+
+  describe('filter record with special characters', () => {
+    let table: ITableFullVo;
+    let subTable: ITableFullVo;
+    beforeAll(async () => {
+      const newRecords = [...x_20.records];
+      newRecords.splice(
+        1,
+        3,
+        ...[
+          { fields: { [textField.name]: 'notepad++' } },
+          { fields: { [textField.name]: 'notepad++@' } },
+          { fields: { [textField.name]: 'notepad++@' } },
+        ]
+      );
+      table = await createTable(baseId, {
+        name: 'special_characters',
+        fields: x_20.fields,
+        records: newRecords,
+      });
+      const x20Link = x_20_link(table);
+      subTable = await createTable(baseId, {
+        name: 'lookup_filter_special_characters',
+        fields: x20Link.fields,
+        records: x20Link.records,
+      });
+
+      const x20LinkFromLookups = x_20_link_from_lookups(table, subTable.fields[2].id);
+      for (const field of x20LinkFromLookups.fields) {
+        await createField(subTable.id, field);
+      }
+
+      table.fields = (await getFields(table.id)).data;
+      subTable.fields = (await getFields(subTable.id)).data;
+    });
+    afterAll(async () => {
+      await permanentDeleteTable(baseId, table.id);
+      await permanentDeleteTable(baseId, subTable.id);
+    });
+
+    it('should filter record with special characters', async () => {
+      const linkField = subTable.fields.find((field) => field.type === FieldType.Link)!;
+      const { records } = await getFilterRecord(subTable.id, subTable.views[0].id, {
+        filterSet: [{ fieldId: linkField.id, value: 'notepad++', operator: 'contains' }],
+        conjunction: and.value,
+      });
+      expect(records.length).toBe(8);
     });
   });
 });

@@ -33,16 +33,18 @@ export const QueryFrom = (props: {
               <DropdownMenuTrigger asChild>
                 <Button className="text-[13px]" variant="outline" size={'xs'}>
                   {t('baseQuery.add')}
-                  <Plus />
+                  <Plus className="size-4 shrink-0" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56">
                 {maxDepth ? (
-                  tables.map((table) => (
-                    <DropdownMenuItem key={table.id} onClick={() => onClick?.('table', table.id)}>
-                      {table.name}
-                    </DropdownMenuItem>
-                  ))
+                  <div className="max-h-80 overflow-y-auto">
+                    {tables.map((table) => (
+                      <DropdownMenuItem key={table.id} onClick={() => onClick?.('table', table.id)}>
+                        {table.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
                 ) : (
                   <>
                     <DropdownMenuSub>
@@ -50,7 +52,7 @@ export const QueryFrom = (props: {
                         {t('baseQuery.from.fromTable')}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuPortal>
-                        <DropdownMenuSubContent>
+                        <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
                           {tables.map((table) => (
                             <DropdownMenuItem
                               key={table.id}

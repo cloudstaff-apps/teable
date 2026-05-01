@@ -4,5 +4,7 @@ import { TableContext } from '../context/table';
 
 export function useTables() {
   const tableContext = useContext(TableContext);
-  return useMemo(() => orderBy(tableContext?.tables, ['order']), [tableContext?.tables]);
+  return useMemo(() => {
+    return orderBy(tableContext?.tables, ['order']);
+  }, [tableContext?.tables]);
 }

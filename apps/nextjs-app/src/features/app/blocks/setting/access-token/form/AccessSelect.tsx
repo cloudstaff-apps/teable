@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Component, Database, Plus } from '@teable/icons';
 import type { IGetBaseVo } from '@teable/openapi';
-import { getBaseAll, getSpaceList } from '@teable/openapi';
+import { getBaseAll, getSharedBase, getSpaceList } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
 import { Spin } from '@teable/ui-lib/base';
 import {
@@ -22,8 +22,9 @@ import { Emoji } from '@/features/app/components/emoji/Emoji';
 import { AccessList } from './AccessList';
 
 interface IValue {
-  spaceIds: string[];
-  baseIds: string[];
+  spaceIds?: string[];
+  baseIds?: string[];
+  hasFullAccess?: boolean;
 }
 
 interface IFormAccess {
@@ -48,6 +49,11 @@ export const AccessSelect = (props: IFormAccess) => {
     queryFn: () => getBaseAll().then((data) => data.data),
   });
 
+  const { data: sharedBaseList, isLoading: sharedBaseListLoading } = useQuery({
+    queryKey: ReactQueryKeys.getSharedBase(),
+    queryFn: () => getSharedBase().then((data) => data.data),
+  });
+
   const baseMap = useMemo(
     () =>
       baseList?.reduce(
@@ -63,6 +69,7 @@ export const AccessSelect = (props: IFormAccess) => {
 
   const onChangeInner = (spaceId?: string, baseId?: string) => {
     onChange({
+      ...value,
       spaceIds: spaceId ? [...spaces, spaceId] : spaces,
       baseIds: baseId ? [...bases, baseId] : bases,
     });
@@ -72,6 +79,7 @@ export const AccessSelect = (props: IFormAccess) => {
     const newBases = bases.filter((id) => id !== baseId);
     setBases(newBases);
     onChange({
+      ...value,
       spaceIds: spaces,
       baseIds: newBases,
     });
@@ -81,61 +89,72 @@ export const AccessSelect = (props: IFormAccess) => {
     const newSpaces = spaces.filter((id) => id !== spaceId);
     setSpaces(newSpaces);
     onChange({
+      ...value,
       spaceIds: newSpaces,
       baseIds: bases,
     });
   };
 
-  if (spaceListLoading || baseListLoading) {
+  if (spaceListLoading || baseListLoading || sharedBaseListLoading) {
     return <Spin className="size-5" />;
   }
 
+  const onFullAccessChange = (hasFullAccess?: boolean) => {
+    onChange({
+      ...value,
+      hasFullAccess,
+    });
+  };
+
   return (
-    <div>
+    <div className="space-y-2">
       <AccessList
+        hasFullAccess={value?.hasFullAccess}
         spaceIds={spaces}
         baseIds={bases}
         onDeleteBaseId={onDeleteBaseId}
         onDeleteSpaceId={onDeleteSpaceId}
+        onDeleteFullAccess={() => {
+          onFullAccessChange(false);
+        }}
       />
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button size={'sm'} variant="outline" role="combobox" aria-expanded={open}>
-            <Plus />
-            {t('accessSelect.button')}
+      <div className="flex items-center gap-2">
+        {!value?.hasFullAccess && (
+          <Button
+            size={'sm'}
+            variant="outline"
+            onClick={() => {
+              onFullAccessChange(true);
+            }}
+          >
+            <Plus className="size-4 shrink-0" />
+            {t('accessSelect.fullAccess.button')}
           </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-96 p-0">
-          <Command>
-            <CommandInput placeholder={t('accessSelect.inputPlaceholder')} className="h-9" />
-            <CommandEmpty>{t('accessSelect.empty')}</CommandEmpty>
-            <CommandList>
-              {spaceList
-                ?.filter(({ id: spaceId }) => !spaces.includes(spaceId))
-                ?.map(({ id, name }) => (
+        )}
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button size={'sm'} variant="outline" role="combobox" aria-expanded={open}>
+              <Plus className="size-4 shrink-0" />
+              {t('accessSelect.button')}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-96 p-0">
+            <Command>
+              <CommandInput placeholder={t('accessSelect.inputPlaceholder')} className="h-9" />
+              <CommandEmpty>{t('accessSelect.empty')}</CommandEmpty>
+              <CommandList>
+                {Boolean(sharedBaseList?.length) && (
                   <CommandGroup
-                    key={id}
-                    heading={<div className="truncate text-sm">{name}</div>}
-                    title={name}
+                    heading={
+                      <div className="truncate text-sm font-bold">
+                        {t('accessSelect.sharedBase')}
+                      </div>
+                    }
                   >
-                    <CommandItem
-                      className="gap-1"
-                      key={`${id}-all`}
-                      value={name}
-                      onSelect={() => {
-                        setSpaces((prev) => [...prev, id]);
-                        setOpen(false);
-                        onChangeInner(id);
-                      }}
-                    >
-                      <Component className="size-4 shrink-0" />
-                      {t('accessSelect.spaceSelectItem')}
-                    </CommandItem>
-                    {baseMap[id]
+                    {sharedBaseList
                       ?.filter(({ id: baseId }) => !bases.includes(baseId))
                       ?.map((base) => (
                         <CommandItem
-                          className="gap-1"
                           key={base.id}
                           value={`${base.id}-${base.name}`}
                           title={base.name}
@@ -145,20 +164,61 @@ export const AccessSelect = (props: IFormAccess) => {
                             onChangeInner(undefined, base.id);
                           }}
                         >
-                          {base.icon ? (
-                            <Emoji className="w-4 shrink-0" emoji={base.icon} size={16} />
-                          ) : (
-                            <Database className="size-4 shrink-0" />
-                          )}
-                          <div className="truncate">{base.name}</div>
+                          {base.name}
                         </CommandItem>
                       ))}
                   </CommandGroup>
-                ))}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
+                )}
+                {spaceList
+                  ?.filter(({ id: spaceId }) => !spaces.includes(spaceId))
+                  ?.map(({ id, name }) => (
+                    <CommandGroup
+                      key={id}
+                      heading={<div className="truncate text-sm font-bold">{name}</div>}
+                      title={name}
+                    >
+                      <CommandItem
+                        className="gap-1"
+                        key={`${id}-all`}
+                        value={name}
+                        onSelect={() => {
+                          setSpaces((prev) => [...prev, id]);
+                          setOpen(false);
+                          onChangeInner(id);
+                        }}
+                      >
+                        <Component className="size-4 shrink-0" />
+                        {t('accessSelect.spaceSelectItem')}
+                      </CommandItem>
+                      {baseMap[id]
+                        ?.filter(({ id: baseId }) => !bases.includes(baseId))
+                        ?.map((base) => (
+                          <CommandItem
+                            className="gap-1"
+                            key={base.id}
+                            value={`${base.id}-${base.name}`}
+                            title={base.name}
+                            onSelect={() => {
+                              setBases((prev) => [...prev, base.id]);
+                              setOpen(false);
+                              onChangeInner(undefined, base.id);
+                            }}
+                          >
+                            {base.icon ? (
+                              <Emoji className="w-4 shrink-0" emoji={base.icon} size={16} />
+                            ) : (
+                              <Database className="size-4 shrink-0" />
+                            )}
+                            <div className="truncate">{base.name}</div>
+                          </CommandItem>
+                        ))}
+                    </CommandGroup>
+                  ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import type { Action } from '@teable/core';
+import { OAUTH_ACTIONS, type Action } from '@teable/core';
 import {
   UploadType,
   oauthCreateRoSchema,
@@ -7,8 +7,8 @@ import {
   type OAuthUpdateRo,
 } from '@teable/openapi';
 import { FileZone } from '@teable/sdk/components/FileZone';
-import { Button, Input, Separator, Textarea, useToast } from '@teable/ui-lib/shadcn';
-import Image from 'next/image';
+import { Button, Input, Separator, Textarea } from '@teable/ui-lib/shadcn';
+import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { useTranslation } from 'next-i18next';
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { usePreviewUrl } from '@/features/app/hooks/usePreviewUrl';
@@ -63,15 +63,14 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
   };
 
   const { t } = useTranslation(oauthAppConfig.i18nNamespaces);
-  const { toast } = useToast();
   const getPreviewUrl = usePreviewUrl();
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const { mutateAsync: uploadLogo, isLoading: uploadLogoLoading } = useMutation({
+  const { mutateAsync: uploadLogo, isPending: uploadLogoLoading } = useMutation({
     mutationFn: (files: File[]) => uploadFiles(files, UploadType.OAuth),
     onSuccess: (res) => {
-      if (res?.[0]?.url) {
-        updateForm('logo', res[0].url);
+      if (res?.[0]?.path) {
+        updateForm('logo', res[0].path);
       }
       return res;
     },
@@ -80,11 +79,11 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
   const logoChange = (files: File[]) => {
     if (files.length === 0) return;
     if (files.length > 1) {
-      toast({ title: t('oauth:form.logo.lengthError') });
+      toast.warning(t('oauth:form.logo.lengthError'));
       return;
     }
     if (files[0].type.indexOf('image') === -1) {
-      toast({ title: t('oauth:form.logo.typeError') });
+      toast.warning(t('oauth:form.logo.typeError'));
       return;
     }
     uploadLogo(files);
@@ -109,7 +108,6 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
           required
         >
           <Input
-            className="h-8"
             type="text"
             value={form.name}
             onChange={(e) => updateForm('name', e.target.value)}
@@ -133,7 +131,6 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
           required
         >
           <Input
-            className="h-8"
             type="text"
             value={form.homepage}
             onChange={(e) => updateForm('homepage', e.target.value)}
@@ -179,14 +176,10 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
           >
             {form.logo && (
               <div className="relative size-full overflow-hidden rounded-md border border-border">
-                <Image
+                <img
                   src={getPreviewUrl(form.logo)}
                   alt="card cover"
-                  fill
-                  sizes="100%"
-                  style={{
-                    objectFit: 'contain',
-                  }}
+                  className="absolute inset-0 size-full object-contain"
                 />
               </div>
             )}
@@ -222,8 +215,14 @@ export const OAuthAppForm = forwardRef<IOAuthAppFormRef, IOAuthAppFormProps>((pr
         </div>
         <ScopesSelect
           actionsPrefixes={OAuthActionsPrefixes}
+          allowedActions={OAUTH_ACTIONS}
           initValue={form.scopes as Action[]}
-          onChange={(value) => updateForm('scopes', value)}
+          onChange={(value) =>
+            updateForm(
+              'scopes',
+              value.filter((v) => OAUTH_ACTIONS.includes(v as (typeof OAUTH_ACTIONS)[number]))
+            )
+          }
         />
       </div>
     </>

@@ -2,63 +2,62 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Check, Key } from '@teable/icons';
 import type { GenerateOAuthSecretVo, OAuthUpdateRo } from '@teable/openapi';
 import { deleteOAuthSecret, generateOAuthSecret, oauthGet, oauthUpdate } from '@teable/openapi';
+import { ReactQueryKeys } from '@teable/sdk/config';
 import { useLanDayjs } from '@teable/sdk/hooks';
 import { Spin } from '@teable/ui-lib/base';
 import { Badge, Button, Separator, cn } from '@teable/ui-lib/shadcn';
-import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { useRef, useState } from 'react';
 import { CopyButton } from '@/features/app/components/CopyButton';
 import { oauthAppConfig } from '@/features/i18n/oauth-app.config';
-import { OAuthAppDetailLayout } from './OAuthAppDetailLayout';
+import { FormPageLayout } from '../../components/FormPageLayout';
 import type { IOAuthAppFormRef } from './OAuthAppForm';
 import { OAuthAppForm } from './OAuthAppForm';
 
 interface IOAuthAppEditProps {
   onBack: () => void;
+  clientId: string;
 }
 
 export const OAuthAppEdit = (props: IOAuthAppEditProps) => {
-  const { onBack } = props;
-  const router = useRouter();
+  const { onBack, clientId } = props;
   const formRef = useRef<IOAuthAppFormRef>(null);
   const { t } = useTranslation(oauthAppConfig.i18nNamespaces);
   const dayjs = useLanDayjs();
   const queryClient = useQueryClient();
-  const clientId = router.query.id as string;
   const [updatedForm, setUpdatedForm] = useState<OAuthUpdateRo>();
   const [newSecret, setNewSecret] = useState<GenerateOAuthSecretVo>();
 
   const { data: oauthApp, isLoading: queryLoading } = useQuery({
-    queryKey: ['oauthApp', clientId],
+    queryKey: ReactQueryKeys.oauthApp(clientId),
     queryFn: ({ queryKey }) => oauthGet(queryKey[1]).then((data) => data.data),
-    cacheTime: 0,
+    gcTime: 0,
   });
 
-  const { mutate: updateMutate, isLoading } = useMutation({
+  const { mutate: updateMutate, isPending: isLoading } = useMutation({
     mutationFn: (ro: OAuthUpdateRo) => oauthUpdate(clientId, ro),
     onSuccess: () => {
       onBack();
     },
   });
 
-  const { mutate: generateSecretMutate, isLoading: generateSecretLoading } = useMutation({
+  const { mutate: generateSecretMutate, isPending: generateSecretLoading } = useMutation({
     mutationFn: generateOAuthSecret,
     onSuccess: (res) => {
       setNewSecret(res.data);
-      queryClient.invalidateQueries(['oauthApp', clientId]);
+      queryClient.invalidateQueries({ queryKey: ReactQueryKeys.oauthApp(clientId) });
     },
   });
 
   const { mutate: deleteSecretMutate } = useMutation({
     mutationFn: (secretId: string) => deleteOAuthSecret(clientId, secretId),
     onSuccess: () => {
-      queryClient.invalidateQueries(['oauthApp', clientId]);
+      queryClient.invalidateQueries({ queryKey: ReactQueryKeys.oauthApp(clientId) });
     },
   });
 
   return (
-    <OAuthAppDetailLayout
+    <FormPageLayout
       onCancel={onBack}
       loading={isLoading}
       onSubmit={() => {
@@ -154,6 +153,6 @@ export const OAuthAppEdit = (props: IOAuthAppEditProps) => {
       {!queryLoading && (
         <OAuthAppForm ref={formRef} showBasicTitle value={oauthApp} onChange={setUpdatedForm} />
       )}
-    </OAuthAppDetailLayout>
+    </FormPageLayout>
   );
 };

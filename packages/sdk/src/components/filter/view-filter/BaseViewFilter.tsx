@@ -20,13 +20,14 @@ interface IViewFilterProps<T extends IConditionItemProperty = IViewFilterConditi
    * 3. it's better to not set default context, because of when this component is used in other unknown place may cause unexpected behavior
    */
   viewFilterLinkContext: IViewFilterLinkContext;
-  customValueComponent?: IFilterBaseComponent<T>;
+  customValueComponent?: IFilterBaseComponent<T> & { modal?: boolean };
+  operatorSelect?: IFilterBaseComponent<T>;
 }
 
 export const BaseViewFilter = <T extends IConditionItemProperty = IViewFilterConditionItem>(
-  props: IViewFilterProps<T>
+  props: IViewFilterProps<T> & { modal?: boolean }
 ) => {
-  const { value: filter, onChange, customValueComponent, fields } = props;
+  const { value: filter, onChange, customValueComponent, fields, operatorSelect } = props;
 
   const baseFilter = useMemo<IBaseViewFilter<T>>(() => {
     return viewFilter2BaseFilter(filter);
@@ -54,11 +55,9 @@ export const BaseViewFilter = <T extends IConditionItemProperty = IViewFilterCon
         defaultItemValue={defaultItemValue}
         value={baseFilter}
         onChange={onChangeHandler}
-        footerClassName="p-2 pt-0"
-        contentClassName="py-2 px-3"
         components={{
           FieldComponent: FieldSelect,
-          OperatorComponent: OperatorSelect,
+          OperatorComponent: operatorSelect ?? OperatorSelect,
           ValueComponent: customValueComponent ?? FieldValue,
         }}
       />

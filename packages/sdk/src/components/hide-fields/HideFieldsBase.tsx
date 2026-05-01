@@ -23,9 +23,9 @@ import {
 import { map } from 'lodash';
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useTranslation } from '../../context/app/i18n';
-import { useFieldStaticGetter, useView } from '../../hooks';
+import { useFieldStaticGetter } from '../../hooks';
 import type { IFieldInstance } from '../../model';
-import { swapReorder } from '../../utils/order';
+import { ReadOnlyTip } from '../ReadOnlyTip';
 
 interface IHideFieldsBaseProps {
   fields: IFieldInstance[];
@@ -33,15 +33,17 @@ interface IHideFieldsBaseProps {
   footer?: React.ReactNode;
   children: React.ReactNode;
   onChange: (hidden: string[]) => void;
+  onOrderChange?: (fieldId: string, fromIndex: number, toIndex: number) => void;
 }
 
 export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
-  const { fields, hidden, footer, children, onChange } = props;
-  const fieldStaticGetter = useFieldStaticGetter();
-  const view = useView();
-  const [innerFields, setInnerFields] = useState([...fields]);
+  const { fields, hidden, footer, children, onChange, onOrderChange } = props;
   const { t } = useTranslation();
+  const fieldStaticGetter = useFieldStaticGetter();
+
+  const [innerFields, setInnerFields] = useState([...fields]);
   const [dragHandleVisible, setDragHandleVisible] = useState(true);
+  const dragEnabled = Boolean(onOrderChange) && dragHandleVisible;
 
   useEffect(() => {
     setInnerFields([...fields]);
@@ -79,33 +81,18 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
     const to = over?.data?.current?.sortable?.index;
     const from = active?.data?.current?.sortable?.index;
 
-    if (!over || !view || to === from) {
+    if (!over || to === from) {
       return;
     }
 
     const list = [...fields];
     const [field] = list.splice(from, 1);
-
-    const newOrder = swapReorder(1, from, to, fields.length, (index) => {
-      const fieldId = fields[index].id;
-      return view?.columnMeta[fieldId].order;
-    })[0];
-
-    if (newOrder === view?.columnMeta[field.id].order) {
-      return;
-    }
-
     list.splice(to, 0, field);
     setInnerFields(list);
-    view.updateColumnMeta([
-      {
-        fieldId: field.id as string,
-        columnMeta: {
-          order: newOrder,
-        },
-      },
-    ]);
+
+    onOrderChange?.(field.id, from, to);
   };
+
   const commandFilter = useCallback(
     (fieldId: string, searchValue: string) => {
       const currentField = fields.find(
@@ -123,27 +110,32 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
   };
 
   const content = () => (
-    <div className="rounded-lg p-1">
+    <div className="rounded-lg">
       <Command filter={commandFilter}>
         <CommandInput
           placeholder={t('common.search.placeholder')}
-          className="h-8 text-xs"
+          className="h-10 text-xs"
           onValueChange={(value) => searchHandle(value)}
         />
-        <CommandList className="my-2 max-h-64">
+        <CommandList className="max-h-[280px] p-2">
           <CommandEmpty>{t('common.search.empty')}</CommandEmpty>
           <DndKitContext onDragEnd={dragEndHandler}>
             <Droppable items={innerFields.map(({ id }) => ({ id }))}>
               {innerFields.map((field) => {
-                const { id, name, type, isLookup, isPrimary } = field;
-                const { Icon } = fieldStaticGetter(type, isLookup);
+                const { id, name, type, isLookup, isPrimary, aiConfig, canReadFieldRecord } = field;
+                const { Icon } = fieldStaticGetter(type, {
+                  isLookup,
+                  isConditionalLookup: field.isConditionalLookup,
+                  hasAiConfig: Boolean(aiConfig),
+                  deniedReadRecord: !canReadFieldRecord,
+                });
                 return (
-                  <Draggable key={id} id={id}>
+                  <Draggable key={id} id={id} disabled={!dragEnabled}>
                     {({ setNodeRef, listeners, attributes, style, isDragging }) => (
                       <>
                         {
                           <CommandItem
-                            className="flex flex-1 p-0"
+                            className="flex flex-1 rounded-md p-0"
                             key={id}
                             value={id}
                             ref={setNodeRef}
@@ -155,28 +147,28 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <div className="flex flex-1 items-center p-0">
+                                  <div className="flex flex-1 cursor-pointer items-center truncate p-0">
                                     <Label
                                       htmlFor={id}
                                       className="flex flex-1 cursor-pointer items-center truncate p-2"
                                     >
                                       <Switch
                                         id={id}
-                                        className="scale-75"
+                                        size="sm"
                                         checked={statusMap[id]}
                                         onCheckedChange={(checked) => {
                                           switchChange(id, checked);
                                         }}
                                         disabled={isPrimary}
                                       />
-                                      <Icon className="ml-2 shrink-0" />
+                                      <Icon className="ml-2 size-4 shrink-0" />
                                       <span className="h-full flex-1 cursor-pointer truncate pl-1 text-sm">
                                         {name}
                                       </span>
                                     </Label>
                                     {/* forbid drag when search */}
-                                    {dragHandleVisible && (
-                                      <div {...attributes} {...listeners} className="pr-1">
+                                    {dragEnabled && (
+                                      <div {...attributes} {...listeners} className="pr-2">
                                         <DraggableHandle></DraggableHandle>
                                       </div>
                                     )}
@@ -184,7 +176,7 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
                                 </TooltipTrigger>
                                 {isPrimary ? (
                                   <TooltipContent>
-                                    <p>{t('hidden.primaryKey')}</p>
+                                    <pre>{t('hidden.primaryKey')}</pre>
                                   </TooltipContent>
                                 ) : null}
                               </Tooltip>
@@ -201,21 +193,11 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
         </CommandList>
       </Command>
       {dragHandleVisible && (
-        <div className="flex justify-between p-2">
-          <Button
-            variant="secondary"
-            size="xs"
-            className="w-32 text-muted-foreground hover:text-secondary-foreground"
-            onClick={showAll}
-          >
+        <div className="flex justify-between gap-3 border-t px-4 pb-4 pt-3">
+          <Button variant="outline" size="xs" className="w-32" onClick={showAll}>
             {t('hidden.showAll')}
           </Button>
-          <Button
-            variant="secondary"
-            size="xs"
-            className="w-32 text-muted-foreground hover:text-secondary-foreground"
-            onClick={hideAll}
-          >
+          <Button variant="outline" size="xs" className="w-32" onClick={hideAll}>
             {t('hidden.hideAll')}
           </Button>
         </div>
@@ -226,7 +208,8 @@ export const HideFieldsBase = (props: IHideFieldsBaseProps) => {
   return (
     <Popover modal>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="p-0">
+      <PopoverContent side="bottom" align="start" className="relative rounded-lg p-0">
+        <ReadOnlyTip />
         {content()}
         {footer}
       </PopoverContent>

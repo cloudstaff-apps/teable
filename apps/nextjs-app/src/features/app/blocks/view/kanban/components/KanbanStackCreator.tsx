@@ -2,8 +2,8 @@ import { ColorUtils, type ISelectFieldChoice } from '@teable/core';
 import { Plus } from '@teable/icons';
 import type { SingleSelectField } from '@teable/sdk/model';
 import { Button, Popover, PopoverContent, PopoverTrigger } from '@teable/ui-lib/shadcn';
+import { useTranslation } from 'next-i18next';
 import { useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { ChoiceItem } from '@/features/app/components/field-setting/options/SelectOptions';
 import { tableConfig } from '@/features/i18n/table.config';
 import type { IKanbanContext } from '../context';
@@ -64,8 +64,8 @@ export const KanbanStackCreator = () => {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="lg" className="h-12 text-base" onClick={onToggle}>
-          <Plus className="size-5" />
+        <Button variant="outline" size="lg" onClick={onToggle}>
+          <Plus className="size-4" />
           {t('table:kanban.stack.addStack')}
         </Button>
       </PopoverTrigger>

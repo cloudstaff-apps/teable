@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import { Injectable, Logger } from '@nestjs/common';
-import type { IOtOperation } from '@teable/core';
-import { IdPrefix, RecordOpBuilder } from '@teable/core';
+import { HttpErrorCode, IdPrefix, RecordOpBuilder, FieldType } from '@teable/core';
+import type { IOtOperation, IRecord, TableDomain } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
 import { Knex } from 'knex';
 import { groupBy, isEmpty, keyBy } from 'lodash';
@@ -10,16 +10,20 @@ import { InjectModel } from 'nest-knexjs';
 import { ClsService } from 'nestjs-cls';
 import { bufferCount, concatMap, from, lastValueFrom } from 'rxjs';
 import { IThresholdConfig, ThresholdConfig } from '../../configs/threshold.config';
+import { CustomHttpException } from '../../custom.exception';
 import { InjectDbProvider } from '../../db-provider/db.provider';
 import { IDbProvider } from '../../db-provider/db.provider.interface';
 import type { IRawOp, IRawOpMap } from '../../share-db/interface';
 import { RawOpType } from '../../share-db/interface';
 import type { IClsStore } from '../../types/cls';
+import { handleDBValidationErrors } from '../../utils/db-validation-error';
 import { Timing } from '../../utils/timing';
 import type { IFieldInstance } from '../field/model/factory';
-import { createFieldInstanceByRaw } from '../field/model/factory';
+import { createFieldInstanceByRaw, fieldCore2FieldInstance } from '../field/model/factory';
 import { dbType2knexFormat, SchemaType } from '../field/util';
-import { IOpsMap } from './reference.service';
+import { RecordQueryService } from '../record/record-query.service';
+import { TableDomainQueryService } from '../table-domain/table-domain-query.service';
+import { IOpsMap } from './utils/compose-maps';
 
 export interface IOpsData {
   recordId: string;
@@ -27,8 +31,6 @@ export interface IOpsData {
     [dbFieldName: string]: unknown;
   };
   version: number;
-  lastModifiedTime: string;
-  lastModifiedBy: string;
 }
 
 @Injectable()
@@ -39,13 +41,15 @@ export class BatchService {
     private readonly prismaService: PrismaService,
     @InjectModel('CUSTOM_KNEX') private readonly knex: Knex,
     @InjectDbProvider() private readonly dbProvider: IDbProvider,
-    @ThresholdConfig() private readonly thresholdConfig: IThresholdConfig
+    @ThresholdConfig() private readonly thresholdConfig: IThresholdConfig,
+    private readonly recordQueryService: RecordQueryService,
+    private readonly tableDomainQueryService: TableDomainQueryService
   ) {}
 
   private async completeMissingCtx(
     opsMap: IOpsMap,
-    fieldMap: { [fieldId: string]: IFieldInstance },
-    tableId2DbTableName: { [tableId: string]: string }
+    fieldMap: { [fieldId: string]: IFieldInstance } = {},
+    tableId2DbTableName: { [tableId: string]: string } = {}
   ) {
     const tableIds = Object.keys(opsMap);
 
@@ -106,6 +110,24 @@ export class BatchService {
     );
     const versionGroup = keyBy(raw, '__id');
 
+    opsPair.map(([recordId]) => {
+      if (!versionGroup[recordId]) {
+        throw new CustomHttpException(
+          `Record ${recordId} not found in ${tableId}`,
+          HttpErrorCode.VALIDATION_ERROR,
+          {
+            localization: {
+              i18nKey: 'httpErrors.field.recordNotFound',
+              context: {
+                recordId,
+                tableId,
+              },
+            },
+          }
+        );
+      }
+    });
+
     const opsData = this.buildRecordOpsData(opsPair, versionGroup);
     if (!opsData.length) return;
 
@@ -119,15 +141,64 @@ export class BatchService {
   }
 
   @Timing()
+  // eslint-disable-next-line sonarjs/cognitive-complexity
   async updateRecords(
     opsMap: IOpsMap,
-    fieldMap: { [fieldId: string]: IFieldInstance },
-    tableId2DbTableName: { [tableId: string]: string }
-  ) {
+    fieldMap: { [fieldId: string]: IFieldInstance } = {},
+    tableId2DbTableName: { [tableId: string]: string } = {},
+    tableDomains?: Map<string, TableDomain>
+  ): Promise<{ [tableId: string]: { [recordId: string]: IRecord } }> {
+    const tableIds = Object.keys(opsMap);
+
+    const domainCache = new Map<string, TableDomain>(tableDomains || []);
+    const missingDomainIds = tableIds.filter((id) => !domainCache.has(id));
+    if (missingDomainIds.length) {
+      const fetched = await this.tableDomainQueryService.getTableDomainsByIds(missingDomainIds);
+      for (const [tid, domain] of fetched) {
+        domainCache.set(tid, domain);
+      }
+    }
+
+    // Prefill table/db mapping and field instances from domains to reduce follow-up lookups
+    for (const [tid, domain] of domainCache) {
+      tableId2DbTableName[tid] ||= domain.dbTableName;
+      for (const field of domain.fieldList) {
+        if (!fieldMap[field.id]) {
+          fieldMap[field.id] = fieldCore2FieldInstance(field);
+        }
+      }
+    }
+
     const result = await this.completeMissingCtx(opsMap, fieldMap, tableId2DbTableName);
     fieldMap = result.fieldMap;
     tableId2DbTableName = result.tableId2DbTableName;
 
+    // Get old records before updating
+    const oldRecords: { [tableId: string]: { [recordId: string]: IRecord } } = {};
+
+    for (const tableId in opsMap) {
+      const recordIds = Object.keys(opsMap[tableId]);
+      if (recordIds.length === 0) continue;
+
+      try {
+        const domain = domainCache.get(tableId);
+        if (!domain) {
+          this.logger.warn(`TableDomain not found for table ${tableId}, skip snapshot read`);
+          oldRecords[tableId] = {};
+          continue;
+        }
+        const snapshots = await this.recordQueryService.getSnapshotBulk(domain, recordIds);
+        oldRecords[tableId] = {};
+        for (const snapshot of snapshots) {
+          oldRecords[tableId][snapshot.id] = snapshot.data;
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to get old records for table ${tableId}: ${error}`);
+        oldRecords[tableId] = {};
+      }
+    }
+
+    // Perform the actual updates
     for (const tableId in opsMap) {
       const dbTableName = tableId2DbTableName[tableId];
       const recordOpsMap = opsMap[tableId];
@@ -146,6 +217,8 @@ export class BatchService {
         )
       );
     }
+
+    return oldRecords;
   }
 
   // @Timing()
@@ -159,8 +232,6 @@ export class BatchService {
       {
         __version: number;
         __id: string;
-        __last_modified_time: Date;
-        __last_modified_by: string;
       }[]
     >(querySql);
   }
@@ -171,8 +242,6 @@ export class BatchService {
       [recordId: string]: {
         __version: number;
         __id: string;
-        __last_modified_time: Date;
-        __last_modified_by: string;
       };
     }
   ) {
@@ -182,21 +251,25 @@ export class BatchService {
       const updateParam = ops.reduce<{ [fieldId: string]: unknown }>((pre, op) => {
         const opContext = RecordOpBuilder.editor.setRecord.detect(op);
         if (!opContext) {
-          throw new Error(`illegal op ${JSON.stringify(op)} found`);
+          throw new CustomHttpException(
+            `illegal op ${JSON.stringify(op)} found when build record ops data`,
+            HttpErrorCode.VALIDATION_ERROR,
+            {
+              localization: {
+                i18nKey: 'httpErrors.custom.invalidOperation',
+              },
+            }
+          );
         }
         pre[opContext.fieldId] = opContext.newCellValue;
         return pre;
       }, {});
 
       const version = versionGroup[recordId].__version;
-      const lastModifiedTime = versionGroup[recordId].__last_modified_time?.toISOString();
-      const lastModifiedBy = versionGroup[recordId].__last_modified_by;
 
       opsData.push({
         recordId,
         version,
-        lastModifiedTime,
-        lastModifiedBy,
         updateParam,
       });
     }
@@ -229,8 +302,6 @@ export class BatchService {
     data: { id: string; values: { [key: string]: unknown } }[]
   ) {
     const tempTableName = `temp_` + customAlphabet('abcdefghijklmnopqrstuvwxyz', 10)();
-    const prisma = this.prismaService.txClient();
-
     // 1.create temporary table structure
     const createTempTableSchema = this.knex.schema.createTable(tempTableName, (table) => {
       table.string(idFieldName).primary();
@@ -242,7 +313,6 @@ export class BatchService {
     const createTempTableSql = createTempTableSchema
       .toQuery()
       .replace('create table', 'create temporary table');
-    await prisma.$executeRawUnsafe(createTempTableSql);
 
     const { insertTempTableSql, updateRecordSql } = this.dbProvider.executeUpdateRecordsSqlList({
       dbTableName,
@@ -251,16 +321,84 @@ export class BatchService {
       dbFieldNames: schemas.map((s) => s.dbFieldName),
       data,
     });
-
-    // 2.initialize temporary table data
-    await prisma.$executeRawUnsafe(insertTempTableSql);
-
-    // 3.update data
-    await prisma.$executeRawUnsafe(updateRecordSql);
-
-    // 4.delete temporary table
     const dropTempTableSql = this.knex.schema.dropTable(tempTableName).toQuery();
-    await prisma.$executeRawUnsafe(dropTempTableSql);
+
+    const validDbFieldNames = schemas.map((s) => s.dbFieldName).filter((f) => !f.startsWith('__'));
+
+    await this.prismaService.$tx(async (tx) => {
+      // temp table should in one transaction
+      await tx.$executeRawUnsafe(createTempTableSql);
+      // 2.initialize temporary table data
+      await tx.$executeRawUnsafe(insertTempTableSql);
+      // 3.update data
+      await handleDBValidationErrors({
+        fn: async () => {
+          await tx.$executeRawUnsafe(updateRecordSql);
+        },
+        handleUniqueError: async () => {
+          const tables = await this.prismaService.tableMeta.findMany({
+            where: { dbTableName },
+            select: { id: true, name: true },
+          });
+          const table = tables[0];
+          const fieldRaws = await this.prismaService.field.findMany({
+            where: {
+              tableId: table.id,
+              dbFieldName: { in: validDbFieldNames },
+              unique: true,
+              deletedTime: null,
+            },
+            select: { id: true, name: true },
+          });
+
+          throw new CustomHttpException(
+            `Fields ${fieldRaws.map((f) => f.id).join(', ')} unique validation failed`,
+            HttpErrorCode.VALIDATION_ERROR,
+            {
+              localization: {
+                i18nKey: 'httpErrors.custom.fieldValueDuplicate',
+                context: {
+                  tableName: table.name,
+                  fieldName: fieldRaws.map((f) => f.name).join(', '),
+                },
+              },
+            }
+          );
+        },
+        handleNotNullError: async () => {
+          const tables = await this.prismaService.tableMeta.findMany({
+            where: { dbTableName },
+            select: { id: true, name: true },
+          });
+          const table = tables[0];
+          const fieldRaws = await this.prismaService.field.findMany({
+            where: {
+              tableId: table.id,
+              dbFieldName: { in: validDbFieldNames },
+              notNull: true,
+              deletedTime: null,
+            },
+            select: { id: true, name: true },
+          });
+
+          throw new CustomHttpException(
+            `Fields ${fieldRaws.map((f) => f.id).join(', ')} not null validation failed`,
+            HttpErrorCode.VALIDATION_ERROR,
+            {
+              localization: {
+                i18nKey: 'httpErrors.custom.fieldValueNotNull',
+                context: {
+                  tableName: table.name,
+                  fieldName: fieldRaws.map((f) => f.name).join(', '),
+                },
+              },
+            }
+          );
+        },
+      });
+      // 4.delete temporary table
+      await tx.$executeRawUnsafe(dropTempTableSql);
+    });
   }
 
   private async executeUpdateRecordsInner(
@@ -272,13 +410,12 @@ export class BatchService {
       return;
     }
 
-    const userId = this.cls.get('user.id');
-    const timeStr = this.cls.get('tx.timeStr') ?? new Date().toISOString();
-
-    const fieldIds = Array.from(new Set(opsData.flatMap((d) => Object.keys(d.updateParam))));
-    const shouldUpdateLastModified = fieldIds.some((id) => !fieldMap[id].isComputed);
+    const fieldIds = Array.from(new Set(opsData.flatMap((d) => Object.keys(d.updateParam))))
+      .filter((id) => fieldMap[id])
+      .filter((id) => !fieldMap[id].isComputed)
+      .filter((id) => fieldMap[id].type !== FieldType.Link);
     const data = opsData.map((data) => {
-      const { recordId, updateParam, version, lastModifiedTime, lastModifiedBy } = data;
+      const { recordId, updateParam, version } = data;
 
       return {
         id: recordId,
@@ -286,6 +423,12 @@ export class BatchService {
           ...Object.entries(updateParam).reduce<{ [dbFieldName: string]: unknown }>(
             (pre, [fieldId, value]) => {
               const field = fieldMap[fieldId];
+              if (!field) {
+                return pre;
+              }
+              if (field.isComputed || field.type === FieldType.Link) {
+                return pre;
+              }
               const { dbFieldName } = field;
               pre[dbFieldName] = field.convertCellValue2DBValue(value);
               return pre;
@@ -293,8 +436,6 @@ export class BatchService {
             {}
           ),
           __version: version + 1,
-          __last_modified_time: shouldUpdateLastModified ? timeStr : lastModifiedTime,
-          __last_modified_by: shouldUpdateLastModified ? userId : lastModifiedBy,
         },
       };
     });
@@ -305,15 +446,13 @@ export class BatchService {
         return { dbFieldName, schemaType: dbType2knexFormat(this.knex, dbFieldType) };
       }),
       { dbFieldName: '__version', schemaType: SchemaType.Integer },
-      { dbFieldName: '__last_modified_time', schemaType: SchemaType.Datetime },
-      { dbFieldName: '__last_modified_by', schemaType: SchemaType.String },
     ];
 
     await this.batchUpdateDB(dbTableName, '__id', schemas, data);
   }
 
   @Timing()
-  async saveRawOps(
+  saveRawOps(
     collectionId: string,
     opType: RawOpType,
     docType: IdPrefix,
@@ -332,7 +471,7 @@ export class BatchService {
 
     this.logger.verbose(`saveOp: ${baseRaw.src}-${collection}`);
 
-    const rawOps = dataList.map(({ docId: docId, version, data }) => {
+    dataList.forEach(({ docId, version, data }) => {
       let rawOp: IRawOp;
       if (opType === RawOpType.Create) {
         rawOp = {
@@ -356,38 +495,23 @@ export class BatchService {
           v: version,
         };
       } else {
-        throw new Error('unknown raw op type');
+        throw new CustomHttpException(
+          `unknown raw op type ${opType}`,
+          HttpErrorCode.VALIDATION_ERROR,
+          {
+            localization: {
+              i18nKey: 'httpErrors.custom.invalidOperation',
+            },
+          }
+        );
       }
       rawOpMap[collection][docId] = rawOp;
       return { rawOp, docId };
     });
 
-    await this.executeInsertOps(collectionId, docType, rawOps);
     const prevMap = this.cls.get('tx.rawOpMaps') || [];
     prevMap.push(rawOpMap);
     this.cls.set('tx.rawOpMaps', prevMap);
     return rawOpMap;
-  }
-
-  private async executeInsertOps(
-    collectionId: string,
-    docType: IdPrefix,
-    rawOps: { rawOp: IRawOp; docId: string }[]
-  ) {
-    const userId = this.cls.get('user.id');
-    const insertRowsData = rawOps.map(({ rawOp, docId }) => {
-      return {
-        collection: collectionId,
-        doc_type: docType,
-        doc_id: docId,
-        version: rawOp.v,
-        operation: JSON.stringify(rawOp),
-        created_by: userId,
-        created_time: new Date().toISOString(),
-      };
-    });
-
-    const batchInsertOpsSql = this.dbProvider.batchInsertSql('ops', insertRowsData);
-    return this.prismaService.txClient().$executeRawUnsafe(batchInsertOpsSql);
   }
 }

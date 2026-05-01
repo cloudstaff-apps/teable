@@ -17,26 +17,30 @@ interface IOperatorOptions {
 }
 
 interface IBaseOperatorSelectProps<T extends IConditionItemProperty = IViewFilterConditionItem>
-  extends IBaseFilterCustomComponentProps<T, IFilterItem['operator']> {}
+  extends IBaseFilterCustomComponentProps<T, IFilterItem['operator']> {
+  disabledOperators?: IFilterOperator[];
+}
 
 export const OperatorSelect = <T extends IConditionItemProperty = IViewFilterConditionItem>(
   props: IBaseOperatorSelectProps<T>
 ) => {
-  const { value, item, path } = props;
+  const { value, item, path, disabledOperators } = props;
   const { field: fieldId } = item;
   const { onChange } = useCrud();
   const fields = useFields();
   const field = fields.find((f) => f.id === fieldId);
-  const labelMapping = useOperatorI18nMap(field);
+  const labelMapping = useOperatorI18nMap(field?.cellValueType);
   const operators = useOperators(field);
   const operatorOption = useMemo<IOperatorOptions[]>(() => {
-    return operators.map((operator) => {
-      return {
-        label: labelMapping[operator],
-        value: operator,
-      };
-    });
-  }, [labelMapping, operators]);
+    return operators
+      .filter((operator) => !disabledOperators?.includes(operator))
+      .map((operator) => {
+        return {
+          label: labelMapping[operator],
+          value: operator,
+        };
+      });
+  }, [labelMapping, operators, disabledOperators]);
 
   const shouldDisabled = useMemo(() => shouldFilterByDefaultValue(field), [field]);
 
@@ -62,7 +66,7 @@ export const OperatorSelect = <T extends IConditionItemProperty = IViewFilterCon
       value={value}
       options={operatorOption}
       popoverClassName="w-48"
-      className={cn('shrink-0 justify-between w-28')}
+      className={cn('shrink-0 justify-between w-[88px] gap-0 pr-1.5 h-8')}
       onSelect={onSelectHandler}
       disabled={shouldDisabled}
       defaultLabel={<DefaultErrorLabel />}

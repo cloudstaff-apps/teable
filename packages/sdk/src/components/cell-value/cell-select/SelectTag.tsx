@@ -13,13 +13,13 @@ export const SelectTag: React.FC<React.PropsWithChildren<ISelectTag>> = (props) 
   return (
     <div
       className={cn(
-        'text-[13px] px-2 h-6 leading-6 rounded-md bg-secondary text-secondary-foreground truncate',
+        'max-w-full text-xs px-2 h-5 rounded-md bg-secondary text-secondary-foreground flex items-center gap-1',
         className
       )}
       style={{ color, backgroundColor }}
       title={label}
     >
-      {label}
+      <span className="min-w-0 truncate">{label}</span>
       {children}
     </div>
   );

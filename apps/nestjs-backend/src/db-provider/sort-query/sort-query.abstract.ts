@@ -1,8 +1,8 @@
 import { Logger } from '@nestjs/common';
-import type { ISortItem } from '@teable/core';
+import type { FieldCore, ISortItem } from '@teable/core';
 import { CellValueType, DbFieldType } from '@teable/core';
 import type { Knex } from 'knex';
-import type { IFieldInstance } from '../../features/field/model/factory';
+import type { IRecordQuerySortContext } from '../../features/record/query-builder/record-query-builder.interface';
 import type { ISortQueryExtra } from '../db.provider.interface';
 import type { AbstractSortFunction } from './function/sort-function.abstract';
 import type { ISortQueryInterface } from './sort-query.interface';
@@ -13,9 +13,10 @@ export abstract class AbstractSortQuery implements ISortQueryInterface {
   constructor(
     protected readonly knex: Knex,
     protected readonly originQueryBuilder: Knex.QueryBuilder,
-    protected readonly fields?: { [fieldId: string]: IFieldInstance },
+    protected readonly fields?: { [fieldId: string]: FieldCore },
     protected readonly sortObjs?: ISortItem[],
-    protected readonly extra?: ISortQueryExtra
+    protected readonly extra?: ISortQueryExtra,
+    protected readonly context?: IRecordQuerySortContext
   ) {}
 
   appendSortBuilder(): Knex.QueryBuilder {
@@ -31,16 +32,22 @@ export abstract class AbstractSortQuery implements ISortQueryInterface {
     if (!sortObjs?.length) {
       return defaultSortSql;
     }
-    let sortSQLText = sortObjs
+    const sortClauses = sortObjs
       .map(({ fieldId, order }) => {
-        const field = (this.fields && this.fields[fieldId]) as IFieldInstance;
-
+        const field = this.fields && this.fields[fieldId];
+        if (!field) {
+          return undefined;
+        }
         return this.getSortAdapter(field).generateSQL(order);
       })
-      .join();
+      .filter((clause): clause is string => typeof clause === 'string' && clause.length > 0);
 
-    sortSQLText += `, ${defaultSortSql}`;
-    return sortSQLText;
+    if (!sortClauses.length) {
+      return defaultSortSql;
+    }
+
+    sortClauses.push(defaultSortSql);
+    return sortClauses.join(', ');
   }
 
   private parseSorts(queryBuilder: Knex.QueryBuilder, sortObjs?: ISortItem[]): Knex.QueryBuilder {
@@ -60,31 +67,31 @@ export abstract class AbstractSortQuery implements ISortQueryInterface {
     return queryBuilder;
   }
 
-  private getSortAdapter(field: IFieldInstance): AbstractSortFunction {
+  private getSortAdapter(field: FieldCore): AbstractSortFunction {
     const { dbFieldType } = field;
     switch (field.cellValueType) {
       case CellValueType.Boolean:
-        return this.booleanSort(field);
+        return this.booleanSort(field, this.context);
       case CellValueType.Number:
-        return this.numberSort(field);
+        return this.numberSort(field, this.context);
       case CellValueType.DateTime:
-        return this.dateTimeSort(field);
+        return this.dateTimeSort(field, this.context);
       case CellValueType.String: {
         if (dbFieldType === DbFieldType.Json) {
-          return this.jsonSort(field);
+          return this.jsonSort(field, this.context);
         }
-        return this.stringSort(field);
+        return this.stringSort(field, this.context);
       }
     }
   }
 
-  abstract booleanSort(field: IFieldInstance): AbstractSortFunction;
+  abstract booleanSort(field: FieldCore, context?: IRecordQuerySortContext): AbstractSortFunction;
 
-  abstract numberSort(field: IFieldInstance): AbstractSortFunction;
+  abstract numberSort(field: FieldCore, context?: IRecordQuerySortContext): AbstractSortFunction;
 
-  abstract dateTimeSort(field: IFieldInstance): AbstractSortFunction;
+  abstract dateTimeSort(field: FieldCore, context?: IRecordQuerySortContext): AbstractSortFunction;
 
-  abstract stringSort(field: IFieldInstance): AbstractSortFunction;
+  abstract stringSort(field: FieldCore, context?: IRecordQuerySortContext): AbstractSortFunction;
 
-  abstract jsonSort(field: IFieldInstance): AbstractSortFunction;
+  abstract jsonSort(field: FieldCore, context?: IRecordQuerySortContext): AbstractSortFunction;
 }

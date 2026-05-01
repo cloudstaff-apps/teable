@@ -1,8 +1,7 @@
 import fs from 'fs';
-import os from 'node:os';
 import path from 'path';
 import type { INestApplication } from '@nestjs/common';
-import { FieldType, defaultDatetimeFormatting } from '@teable/core';
+import { FieldType, TimeFormatting, defaultDatetimeFormatting } from '@teable/core';
 import type { IInplaceImportOptionRo } from '@teable/openapi';
 import {
   getSignature as apiGetSignature,
@@ -10,6 +9,7 @@ import {
   notify as apiNotify,
   analyzeFile as apiAnalyzeFile,
   importTableFromFile as apiImportTableFromFile,
+  getImportStatus as apiGetImportStatus,
   createBase as apiCreateBase,
   createSpace as apiCreateSpace,
   deleteBase as apiDeleteBase,
@@ -18,10 +18,18 @@ import {
   SUPPORTEDTYPE,
   UploadType,
 } from '@teable/openapi';
+import dayjs, { extend } from 'dayjs';
+import timezone from 'dayjs/plugin/timezone';
+import { noop } from 'lodash';
 import * as XLSX from 'xlsx';
+import { EventEmitterService } from '../src/event-emitter/event-emitter.service';
+import { Events } from '../src/event-emitter/events';
+import StorageAdapter from '../src/features/attachments/plugins/adapter';
 import { CsvImporter } from '../src/features/import/open-api/import.class';
+import { createAwaitWithEventWithResult } from './utils/event-promise';
+import { initApp, permanentDeleteTable, getTable as apiGetTableById } from './utils/init-app';
 
-import { initApp, deleteTable, getTable as apiGetTableById } from './utils/init-app';
+extend(timezone);
 
 enum TestFileFormat {
   'CSV' = 'csv',
@@ -31,6 +39,7 @@ enum TestFileFormat {
 }
 
 const defaultTestSheetKey = 'Sheet1';
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const testSupportTypeMap = {
   [TestFileFormat.CSV]: {
@@ -67,7 +76,7 @@ interface ITestFile {
 const data = `field_1,field_2,field_3,field_4,field_5,field_6
 1,string_1,true,2022-11-10 16:00:00,,"long
 text"
-2,string_2,false,2022-11-11 16:00:00,,`;
+2,string_2,"false",2022-11-11 16:00:00,,`;
 const tsvData = `field_1	field_2	field_3	field_4	field_5	field_6
 1	string_1	true	2022-11-10 16:00:00		"long\ntext"
 2	string_2	false	2022-11-11 16:00:00		`;
@@ -97,10 +106,9 @@ const genTestFiles = async () => {
     [TestFileFormat.TXT]: 'text/plain',
     [TestFileFormat.XLSX]: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   };
-  const tmpDir = os.tmpdir();
   for (let i = 0; i < testFileFormats.length; i++) {
     const format = testFileFormats[i];
-    const tmpPath = path.resolve(path.join(tmpDir, `test.${format}`));
+    const tmpPath = path.resolve(path.join(StorageAdapter.TEMPORARY_DIR, `test.${format}`));
     const data = fileDataMap[format];
     const contentType = contentTypeMap[format];
 
@@ -163,10 +171,12 @@ const assertHeaders = [
 
 describe('OpenAPI ImportController (e2e)', () => {
   const bases: [string, string][] = [];
+  let eventEmitterService: EventEmitterService;
 
   beforeAll(async () => {
     const appCtx = await initApp();
     app = appCtx.app;
+    eventEmitterService = app.get(EventEmitterService);
     testFiles = await genTestFiles();
   });
 
@@ -179,7 +189,7 @@ describe('OpenAPI ImportController (e2e)', () => {
     });
     for (let i = 0; i < bases.length; i++) {
       const [baseId, id] = bases[i];
-      await deleteTable(baseId, id);
+      await permanentDeleteTable(baseId, id);
       await apiDeleteBase(baseId);
     }
     await app.close();
@@ -222,11 +232,15 @@ describe('OpenAPI ImportController (e2e)', () => {
   });
 
   describe('/import/{baseId} OpenAPI ImportController (e2e) (Post)', () => {
-    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let awaitWithEvent: <T>(fn: () => Promise<T>) => Promise<void>;
 
     it.each(testFileFormats.filter((format) => format !== TestFileFormat.TXT))(
       'should create a new Table from %s file',
       async (format) => {
+        awaitWithEvent = createAwaitWithEventWithResult<void>(
+          eventEmitterService,
+          Events.TABLE_RECORD_CREATE_RELATIVE
+        );
         const spaceRes = await apiCreateSpace({ name: `test${format}` });
         const spaceId = spaceRes?.data?.id;
         const baseRes = await apiCreateBase({ spaceId });
@@ -268,7 +282,9 @@ describe('OpenAPI ImportController (e2e)', () => {
           name: field.name,
         }));
 
-        await delay(1000);
+        await awaitWithEvent(async () => {
+          noop();
+        });
 
         const { records } = await apiGetTableById(baseId, table.data[0].id, {
           includeContent: true,
@@ -280,12 +296,79 @@ describe('OpenAPI ImportController (e2e)', () => {
         expect(createdFields).toEqual(assertHeaders);
       }
     );
+
+    it('should query import status until completed for imported table', async () => {
+      const spaceRes = await apiCreateSpace({ name: 'status-check' });
+      const spaceId = spaceRes?.data?.id;
+      const baseRes = await apiCreateBase({ spaceId });
+      const baseId = baseRes.data.id;
+
+      const format = TestFileFormat.CSV;
+      const fileType = testSupportTypeMap[format].fileType;
+      const attachmentUrl = testFiles[format].url;
+      const sheetKey = testSupportTypeMap[format].defaultSheetKey;
+
+      const {
+        data: { worksheets },
+      } = await apiAnalyzeFile({
+        attachmentUrl,
+        fileType,
+      });
+      const columns = worksheets[sheetKey].columns.map((column, index) => ({
+        ...column,
+        sourceColumnIndex: index,
+      }));
+
+      const importRes = await apiImportTableFromFile(baseId, {
+        attachmentUrl,
+        fileType,
+        worksheets: {
+          [sheetKey]: {
+            name: sheetKey,
+            columns,
+            useFirstRowAsHeader: true,
+            importData: true,
+          },
+        },
+        tz: 'Asia/Shanghai',
+      });
+
+      const tableId = importRes.data[0].id;
+      bases.push([baseId, tableId]);
+
+      const timeoutMs = 30000;
+      const intervalMs = 1000;
+      const start = Date.now();
+      let latestStatus: string | undefined;
+
+      while (Date.now() - start < timeoutMs) {
+        const { data } = await apiGetImportStatus(tableId);
+        latestStatus = data.status;
+        if (data.status === 'completed' || data.status === 'failed') {
+          expect(data.successCount).toBeDefined();
+          expect(data.failedCount).toBeDefined();
+          expect((data.successCount ?? 0) + (data.failedCount ?? 0)).toBeGreaterThan(0);
+          expect(data.status).toBe('completed');
+          return;
+        }
+        expect(data.status).not.toBe('not_found');
+        await sleep(intervalMs);
+      }
+
+      throw new Error(
+        `Import status polling timed out, latest status: ${latestStatus ?? 'unknown'}`
+      );
+    });
   });
 
   describe('/import/{baseId}/{tableId} OpenAPI ImportController (e2e) (Patch)', () => {
-    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let awaitWithEvent: <T>(fn: () => Promise<T>) => Promise<void>;
 
     it('should import data into Table from file', async () => {
+      awaitWithEvent = createAwaitWithEventWithResult<void>(
+        eventEmitterService,
+        Events.TABLE_RECORD_CREATE_RELATIVE
+      );
       const spaceRes = await apiCreateSpace({ name: 'test1' });
       const spaceId = spaceRes?.data?.id;
       const baseRes = await apiCreateBase({ spaceId });
@@ -316,7 +399,7 @@ describe('OpenAPI ImportController (e2e)', () => {
             options: {
               formatting: {
                 ...defaultDatetimeFormatting,
-                time: 'HH:mm',
+                time: TimeFormatting.Hour24,
               },
             },
           },
@@ -339,17 +422,17 @@ describe('OpenAPI ImportController (e2e)', () => {
       });
 
       // import data into table
-      await apiInplaceImportTableFromFile(baseId, tableId, {
-        attachmentUrl,
-        fileType,
-        insertConfig: {
-          sourceWorkSheetKey: CsvImporter.DEFAULT_SHEETKEY,
-          excludeFirstRow: true,
-          sourceColumnMap,
-        },
+      await awaitWithEvent(async () => {
+        await apiInplaceImportTableFromFile(baseId, tableId, {
+          attachmentUrl,
+          fileType,
+          insertConfig: {
+            sourceWorkSheetKey: CsvImporter.DEFAULT_SHEETKEY,
+            excludeFirstRow: true,
+            sourceColumnMap,
+          },
+        });
       });
-
-      await delay(1000);
 
       const { records } = await apiGetTableById(baseId, tableId, {
         includeContent: true,
@@ -360,7 +443,7 @@ describe('OpenAPI ImportController (e2e)', () => {
       const tableRecords = records?.map((r) => {
         const newFields = { ...r.fields };
         if (newFields['field_4']) {
-          newFields['field_4'] = +new Date(newFields['field_4'] as string);
+          newFields['field_4'] = new Date(newFields['field_4'] as string).getTime();
         }
         return newFields;
       });
@@ -370,13 +453,19 @@ describe('OpenAPI ImportController (e2e)', () => {
           field_1: 1,
           field_2: 'string_1',
           field_3: true,
-          field_4: +new Date(new Date('2022-11-10 16:00:00').toUTCString()),
+          field_4: dayjs
+            .tz('2022-11-10 16:00:00', defaultDatetimeFormatting.timeZone)
+            .toDate()
+            .getTime(),
           field_6: 'long\ntext',
         },
         {
           field_1: 2,
           field_2: 'string_2',
-          field_4: +new Date(new Date('2022-11-11 16:00:00').toUTCString()),
+          field_4: dayjs
+            .tz('2022-11-11 16:00:00', defaultDatetimeFormatting.timeZone)
+            .toDate()
+            .getTime(),
         },
       ];
 

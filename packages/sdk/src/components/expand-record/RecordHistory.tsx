@@ -1,21 +1,15 @@
 import type { QueryFunctionContext } from '@tanstack/react-query';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
-import { ArrowRight, ChevronRight } from '@teable/icons';
+import type { IFieldVo } from '@teable/core';
+import { FieldType, validateCellValue } from '@teable/core';
+import { ArrowRight, ChevronRight, MagicAi } from '@teable/icons';
 import type { IRecordHistoryItemVo, IRecordHistoryVo } from '@teable/openapi';
 import { getRecordHistory, getRecordListHistory } from '@teable/openapi';
-import {
-  Table,
-  TableHeader,
-  TableRow,
-  TableHead,
-  TableBody,
-  TableCell,
-  Button,
-} from '@teable/ui-lib';
+import { Button } from '@teable/ui-lib';
 import dayjs from 'dayjs';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import { ReactQueryKeys } from '../../config';
 import { useTranslation } from '../../context/app/i18n';
 import { useFieldStaticGetter, useIsHydrated, useTableId } from '../../hooks';
@@ -23,24 +17,32 @@ import type { IFieldInstance } from '../../model';
 import { CellValue } from '../cell-value';
 import { OverflowTooltip } from '../cell-value/components';
 import { CollaboratorWithHoverCard } from '../collaborator';
+import { InfiniteTable } from '../table';
+import { CopyButton } from './components';
 
 interface IRecordHistoryProps {
+  tableId?: string;
   recordId?: string;
   onRecordClick?: (recordId: string) => void;
 }
 
+const SUPPORTED_COPY_FIELD_TYPES = [FieldType.SingleLineText, FieldType.LongText];
+
 export const RecordHistory = (props: IRecordHistoryProps) => {
   const { recordId, onRecordClick } = props;
-  const tableId = useTableId() as string;
+  const anchorTableId = useTableId() as string;
+  const tableId = props.tableId || anchorTableId;
   const { t } = useTranslation();
   const isHydrated = useIsHydrated();
   const getFieldStatic = useFieldStaticGetter();
 
-  const listRef = useRef<HTMLDivElement>(null);
   const [nextCursor, setNextCursor] = useState<string | null | undefined>();
   const [userMap, setUserMap] = useState<IRecordHistoryVo['userMap']>({});
 
-  const queryFn = async ({ queryKey, pageParam }: QueryFunctionContext) => {
+  const queryFn = async ({
+    queryKey,
+    pageParam,
+  }: QueryFunctionContext<readonly (string | undefined)[], string | undefined>) => {
     const recordId = queryKey[2] as string | undefined;
     const res = recordId
       ? await getRecordHistory(queryKey[1] as string, recordId, {
@@ -50,7 +52,7 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
           cursor: pageParam,
         });
     setNextCursor(() => res.data.nextCursor);
-    setUserMap({ ...userMap, ...res.data.userMap });
+    setUserMap((prev) => ({ ...prev, ...res.data.userMap }));
     return res.data.historyList;
   };
 
@@ -59,27 +61,11 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
     queryFn,
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
-    getNextPageParam: () => nextCursor,
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: () => nextCursor ?? undefined,
   });
 
   const allRows = useMemo(() => (data ? data.pages.flatMap((d) => d) : []), [data]);
-
-  const fetchMoreOnBottomReached = useCallback(
-    (containerRefElement?: HTMLDivElement | null) => {
-      if (containerRefElement) {
-        const { scrollHeight, scrollTop, clientHeight } = containerRefElement;
-        const isReachedThreshold = scrollHeight - scrollTop - clientHeight < 30;
-        if (!isFetching && nextCursor && isReachedThreshold) {
-          fetchNextPage();
-        }
-      }
-    },
-    [fetchNextPage, isFetching, nextCursor]
-  );
-
-  useEffect(() => {
-    fetchMoreOnBottomReached(listRef.current);
-  }, [fetchMoreOnBottomReached]);
 
   const columns: ColumnDef<IRecordHistoryItemVo>[] = useMemo(() => {
     const actionVisible = !recordId && onRecordClick;
@@ -87,7 +73,8 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
       {
         accessorKey: 'createdTime',
         header: t('expandRecord.recordHistory.createdTime'),
-        size: 90,
+        size: 128,
+        minSize: 128,
         cell: ({ row }) => {
           const createdTime = row.getValue<string>('createdTime');
           const createdDate = dayjs(createdTime);
@@ -102,7 +89,8 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
       {
         accessorKey: 'createdBy',
         header: t('expandRecord.recordHistory.createdBy'),
-        size: 80,
+        size: 120,
+        minSize: 120,
         cell: ({ row }) => {
           const createdBy = row.getValue<string>('createdBy');
           const user = userMap[createdBy];
@@ -113,7 +101,20 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
 
           return (
             <div className="flex justify-center">
-              <CollaboratorWithHoverCard id={id} name={name} avatar={avatar} email={email} />
+              <CollaboratorWithHoverCard
+                id={id}
+                name={name}
+                avatar={
+                  (id === 'aiRobot' ? (
+                    <div className="flex size-6 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 border-amber-500">
+                      <MagicAi className="size-4 text-amber-500" />
+                    </div>
+                  ) : (
+                    avatar
+                  )) as ReactNode
+                }
+                email={email}
+              />
             </div>
           );
         },
@@ -122,14 +123,19 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
         accessorKey: 'field',
         header: t('noun.field'),
         size: 116,
+        minSize: 116,
         cell: ({ row }) => {
           const after = row.getValue<IRecordHistoryItemVo['after']>('after');
           const { name: fieldName, type: fieldType } = after.meta;
-          const { Icon } = getFieldStatic(fieldType, false);
+          const { Icon } = getFieldStatic(fieldType, {
+            isLookup: after.meta.isLookup,
+            isConditionalLookup: after.meta.isConditionalLookup,
+            hasAiConfig: false,
+          });
           return (
-            <div className="flex items-center gap-x-1">
+            <div className="flex min-w-0 items-center gap-x-1">
               <Icon className="shrink-0" />
-              <OverflowTooltip text={fieldName} maxLine={1} className="flex-1 text-[13px]" />
+              <OverflowTooltip text={fieldName} ellipsis className="min-w-0 flex-1 text-[13px]" />
             </div>
           );
         },
@@ -137,33 +143,50 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
       {
         accessorKey: 'before',
         header: t('expandRecord.recordHistory.before'),
-        size: actionVisible ? 220 : 280,
+        size: Number.MAX_SAFE_INTEGER,
+        minSize: 150,
         cell: ({ row }) => {
           const before = row.getValue<IRecordHistoryItemVo['before']>('before');
+          const validatedCellValue = validateCellValue(before.meta as IFieldVo, before.data);
+          const cellValue = validatedCellValue.success ? validatedCellValue.data : undefined;
+          const canCopy = SUPPORTED_COPY_FIELD_TYPES.includes(before.meta.type);
+          const copyText = typeof cellValue === 'string' ? cellValue : undefined;
           return (
-            <Fragment>
-              {before.data != null ? (
-                <CellValue
-                  value={before.data}
-                  field={before.meta as IFieldInstance}
-                  maxLine={4}
-                  className={actionVisible ? 'max-w-52' : 'max-w-[264px]'}
-                />
+            <div className="group relative w-full min-w-0">
+              {cellValue != null ? (
+                <Fragment>
+                  <div className="line-clamp-6">
+                    <CellValue
+                      value={cellValue}
+                      field={before.meta as IFieldInstance}
+                      className="max-w-full"
+                    />
+                  </div>
+                  {canCopy && copyText && (
+                    <CopyButton
+                      text={copyText}
+                      size="xs"
+                      variant="outline"
+                      className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 dark:!bg-[#333333]"
+                    />
+                  )}
+                </Fragment>
               ) : (
                 <span className="text-gray-500">{t('common.empty')}</span>
               )}
-            </Fragment>
+            </div>
           );
         },
       },
       {
         accessorKey: 'arrow',
         header: '',
-        size: 40,
+        size: 24,
+        minSize: 24,
         cell: () => {
           return (
-            <div className="flex w-full justify-center">
-              <ArrowRight className="text-gray-500" />
+            <div className="-mx-4 flex w-[calc(100%+2rem)] justify-center">
+              <ArrowRight className="text-muted-foreground size-4 shrink-0" />
             </div>
           );
         },
@@ -171,22 +194,38 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
       {
         accessorKey: 'after',
         header: t('expandRecord.recordHistory.after'),
-        size: actionVisible ? 220 : 280,
+        size: Number.MAX_SAFE_INTEGER,
+        minSize: 150,
         cell: ({ row }) => {
           const after = row.getValue<IRecordHistoryItemVo['after']>('after');
+          const validatedCellValue = validateCellValue(after.meta as IFieldVo, after.data);
+          const cellValue = validatedCellValue.success ? validatedCellValue.data : undefined;
+          const canCopy = SUPPORTED_COPY_FIELD_TYPES.includes(after.meta.type);
+          const copyText = typeof cellValue === 'string' ? cellValue : undefined;
           return (
-            <Fragment>
-              {after.data != null ? (
-                <CellValue
-                  value={after.data}
-                  field={after.meta as IFieldInstance}
-                  maxLine={4}
-                  className={actionVisible ? 'max-w-52' : 'max-w-[264px]'}
-                />
+            <div className="group relative w-full min-w-0">
+              {cellValue != null ? (
+                <Fragment>
+                  <div className="line-clamp-6">
+                    <CellValue
+                      value={cellValue}
+                      field={after.meta as IFieldInstance}
+                      className="max-w-full"
+                    />
+                  </div>
+                  {canCopy && copyText && (
+                    <CopyButton
+                      text={copyText}
+                      size="xs"
+                      variant="outline"
+                      className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 dark:!bg-[#333333]"
+                    />
+                  )}
+                </Fragment>
               ) : (
-                <span className="text-gray-500">{t('common.empty')}</span>
+                <span className="text-muted-foreground">{t('common.empty')}</span>
               )}
-            </Fragment>
+            </div>
           );
         },
       },
@@ -217,69 +256,20 @@ export const RecordHistory = (props: IRecordHistoryProps) => {
     return tableColumns;
   }, [recordId, userMap, t, getFieldStatic, onRecordClick]);
 
-  const table = useReactTable({
-    data: allRows,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+  const fetchNextPageInner = useCallback(() => {
+    if (!isFetching && nextCursor) {
+      fetchNextPage();
+    }
+  }, [fetchNextPage, isFetching, nextCursor]);
 
   if (!isHydrated || isLoading) return null;
 
   return (
-    <div
-      ref={listRef}
-      className="relative size-full overflow-auto px-2 sm:overflow-x-hidden"
-      onScroll={(e) => fetchMoreOnBottomReached(e.target as HTMLDivElement)}
-    >
-      <Table className="relative scroll-smooth">
-        <TableHeader className="sticky top-0 z-10 bg-background">
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow
-              key={headerGroup.id}
-              className="flex h-10 bg-background text-[13px] hover:bg-background"
-            >
-              {headerGroup.headers.map((header) => {
-                return (
-                  <TableHead
-                    key={header.id}
-                    className="flex items-center px-0"
-                    style={{
-                      width: header.getSize(),
-                    }}
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                );
-              })}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {table.getRowModel().rows?.length ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id} className="flex text-[13px]">
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell
-                    key={cell.id}
-                    className="flex min-h-[40px] items-center px-0"
-                    style={{
-                      width: cell.column.getSize(),
-                    }}
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
-          ) : (
-            <TableRow>
-              <TableCell colSpan={columns.length} className="h-24 text-center">
-                {t('common.empty')}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </div>
+    <InfiniteTable
+      rows={allRows}
+      columns={columns}
+      className="sm:overflow-x-hidden [&_table]:table-fixed [&_tr]:min-w-0"
+      fetchNextPage={fetchNextPageInner}
+    />
   );
 };

@@ -3,6 +3,7 @@ import { LayoutList } from '@teable/icons';
 import { Popover, PopoverContent, PopoverTrigger } from '@teable/ui-lib';
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from '../../context/app/i18n';
+import { ReadOnlyTip } from '../ReadOnlyTip';
 import { SortContent } from '../sort/SortContent';
 
 interface IGroupProps {
@@ -36,10 +37,13 @@ export const Group = (props: IGroupProps) => {
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>{children?.(text, isActive)}</PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="w-fit max-w-screen-md p-0">
-        <header className="mx-3">
-          <div className="border-b py-3 text-[13px]">{t('group.setTips')}</div>
-        </header>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        className="relative w-fit max-w-screen-md overflow-hidden rounded-lg p-0"
+      >
+        <ReadOnlyTip />
+        <div className="px-4 pt-3 text-[13px]">{t('group.setTips')}</div>
         <SortContent
           limit={3}
           sortValues={group ?? undefined}

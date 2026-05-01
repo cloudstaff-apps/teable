@@ -1,64 +1,132 @@
-import { ForbiddenException, NotFoundException, Injectable } from '@nestjs/common';
-import type { IBaseRole, Action, IRole } from '@teable/core';
-import { IdPrefix, getPermissions } from '@teable/core';
+import { Injectable, Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import type { IBaseRole, Action } from '@teable/core';
+import {
+  HttpErrorCode,
+  IdPrefix,
+  Role,
+  TemplatePermissions,
+  getPermissions,
+  isAnonymous,
+} from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
 import { CollaboratorType } from '@teable/openapi';
-import { intersection } from 'lodash';
+import { intersection, union } from 'lodash';
 import { ClsService } from 'nestjs-cls';
+import { CustomHttpException, TemplateAppTokenNotAllowedException } from '../../custom.exception';
 import type { IClsStore } from '../../types/cls';
+import { getMaxLevelRole } from '../../utils/get-max-level-role';
+import { CollaboratorModel } from '../model/collaborator';
+import { TemplateModel } from '../model/template';
+
+interface IBaseNodeCacheItem {
+  id: string;
+  parentId: string | null;
+  resourceType: string;
+  resourceId: string | null;
+}
+
+const notAllowedOperationI18nKey = 'httpErrors.permission.notAllowedOperation';
+
+/**
+ * Permissions that must never be granted via share links,
+ * even when allowEdit is enabled with a logged-in user.
+ */
+const SHARE_EXCLUDED_PERMISSIONS = new Set<Action>([
+  'view|share',
+  'space|invite_email',
+  'base|invite_email',
+  'user|email_read',
+  'user|integrations',
+]);
 
 @Injectable()
 export class PermissionService {
+  private readonly logger = new Logger(PermissionService.name);
+
   constructor(
     private readonly prismaService: PrismaService,
-    private readonly cls: ClsService<IClsStore>
+    private readonly cls: ClsService<IClsStore>,
+    private readonly collaboratorModel: CollaboratorModel,
+    private readonly templateModel: TemplateModel,
+    private readonly jwtService: JwtService
   ) {}
 
-  async getRoleBySpaceId(spaceId: string) {
-    const userId = this.cls.get('user.id');
+  private getDepartmentIds() {
+    const departments = this.cls.get('organization.departments');
+    return departments?.map((department) => department.id) || [];
+  }
 
-    const collaborator = await this.prismaService.collaborator.findFirst({
+  async getSpaceCollaborators(spaceId: string, principalId: string[]) {
+    const collaborators = await this.collaboratorModel.getCollaboratorRawByResourceId(spaceId);
+    return collaborators.filter((collaborator) => principalId.includes(collaborator.principalId));
+  }
+
+  async getBaseCollaborators(baseId: string, principalId: string[]) {
+    const collaborators = await this.collaboratorModel.getCollaboratorRawByResourceId(baseId);
+    return collaborators.filter((collaborator) => principalId.includes(collaborator.principalId));
+  }
+
+  async getRoleBySpaceId(spaceId: string, includeInactiveResource?: boolean) {
+    const userId = this.cls.get('user.id');
+    const departmentIds = this.getDepartmentIds();
+    const collaborators = await this.getSpaceCollaborators(spaceId, [...departmentIds, userId]);
+    const space = await this.prismaService.space.findFirst({
       where: {
-        userId,
-        resourceId: spaceId,
-        resourceType: CollaboratorType.Space,
+        id: spaceId,
       },
-      select: { roleName: true },
     });
-    if (!collaborator) {
-      throw new ForbiddenException(`can't find collaborator`);
+    if (!space) {
+      throw new CustomHttpException(
+        `space ${spaceId} is not found`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.space.notFound',
+          },
+        }
+      );
     }
-    return collaborator.roleName as IRole;
+    if (space?.deletedTime && !includeInactiveResource) {
+      throw new CustomHttpException(
+        `space ${spaceId} is deleted`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.space.deleted',
+          },
+        }
+      );
+    }
+    if (!collaborators.length) {
+      return null;
+    }
+    return getMaxLevelRole(collaborators);
   }
 
   async getRoleByBaseId(baseId: string) {
+    const departmentIds = this.getDepartmentIds();
     const userId = this.cls.get('user.id');
 
-    const collaborator = await this.prismaService.collaborator.findFirst({
-      where: {
-        userId,
-        resourceId: baseId,
-        resourceType: CollaboratorType.Base,
-      },
-      select: { roleName: true },
-    });
-    if (!collaborator) {
+    const collaborators = await this.getBaseCollaborators(baseId, [...departmentIds, userId]);
+    if (!collaborators.length) {
       return null;
     }
-    return collaborator.roleName as IBaseRole;
+    return getMaxLevelRole(collaborators) as IBaseRole;
   }
 
   async getOAuthAccessBy(userId: string) {
-    const collaborator = await this.prismaService.txClient().collaborator.findMany({
+    const departmentIds = this.getDepartmentIds();
+    const collaborators = await this.prismaService.txClient().collaborator.findMany({
       where: {
-        userId,
+        principalId: { in: [...departmentIds, userId] },
       },
       select: { roleName: true, resourceId: true, resourceType: true },
     });
 
     const spaceIds: string[] = [];
     const baseIds: string[] = [];
-    collaborator.forEach(({ resourceId, resourceType }) => {
+    collaborators.forEach(({ resourceId, resourceType }) => {
       if (resourceType === CollaboratorType.Base) {
         baseIds.push(resourceId);
       } else if (resourceType === CollaboratorType.Space) {
@@ -76,16 +144,24 @@ export class PermissionService {
       baseIds,
       clientId,
       userId,
+      hasFullAccess,
     } = await this.prismaService.accessToken.findFirstOrThrow({
       where: { id: accessTokenId },
-      select: { scopes: true, spaceIds: true, baseIds: true, clientId: true, userId: true },
+      select: {
+        scopes: true,
+        spaceIds: true,
+        baseIds: true,
+        clientId: true,
+        userId: true,
+        hasFullAccess: true,
+      },
     });
     const scopes = JSON.parse(stringifyScopes) as Action[];
-    if (clientId) {
+    if (clientId && clientId.startsWith(IdPrefix.OAuthClient)) {
       const { spaceIds: spaceIdsByOAuth, baseIds: baseIdsByOAuth } =
         await this.getOAuthAccessBy(userId);
       return {
-        scopes,
+        scopes: scopes.concat('base|read_all'),
         spaceIds: spaceIdsByOAuth,
         baseIds: baseIdsByOAuth,
       };
@@ -94,14 +170,18 @@ export class PermissionService {
       scopes,
       spaceIds: spaceIds ? JSON.parse(spaceIds) : undefined,
       baseIds: baseIds ? JSON.parse(baseIds) : undefined,
+      hasFullAccess: hasFullAccess ?? undefined,
     };
   }
 
-  async getUpperIdByTableId(tableId: string): Promise<{ spaceId: string; baseId: string }> {
+  async getUpperIdByTableId(
+    tableId: string,
+    includeInactiveResource?: boolean
+  ): Promise<{ spaceId: string; baseId: string }> {
     const table = await this.prismaService.txClient().tableMeta.findFirst({
       where: {
         id: tableId,
-        deletedTime: null,
+        ...(includeInactiveResource ? {} : { deletedTime: null }),
       },
       select: {
         base: true,
@@ -110,16 +190,24 @@ export class PermissionService {
     const baseId = table?.base.id;
     const spaceId = table?.base?.spaceId;
     if (!spaceId || !baseId) {
-      throw new NotFoundException(`Invalid tableId: ${tableId}`);
+      throw new CustomHttpException(`Invalid tableId: ${tableId}`, HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.table.notFound',
+        },
+      });
     }
+    this.cls.set('spaceId', spaceId);
     return { baseId, spaceId };
   }
 
-  async getUpperIdByBaseId(baseId: string): Promise<{ spaceId: string }> {
+  async getUpperIdByBaseId(
+    baseId: string,
+    includeInactiveResource?: boolean
+  ): Promise<{ spaceId: string }> {
     const base = await this.prismaService.base.findFirst({
       where: {
         id: baseId,
-        deletedTime: null,
+        ...(includeInactiveResource ? {} : { deletedTime: null }),
       },
       select: {
         spaceId: true,
@@ -127,110 +215,786 @@ export class PermissionService {
     });
     const spaceId = base?.spaceId;
     if (!spaceId) {
-      throw new NotFoundException(`Invalid baseId: ${baseId}`);
+      throw new CustomHttpException('Base not found', HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.base.notFound',
+        },
+      });
     }
+    this.cls.set('spaceId', spaceId);
     return { spaceId };
   }
   private async isBaseIdAllowedForResource(
     baseId: string,
     spaceIds: string[] | undefined,
-    baseIds: string[] | undefined
+    baseIds: string[] | undefined,
+    includeInactiveResource?: boolean
   ) {
-    const upperId = await this.getUpperIdByBaseId(baseId);
+    const upperId = await this.getUpperIdByBaseId(baseId, includeInactiveResource);
     return spaceIds?.includes(upperId.spaceId) || baseIds?.includes(baseId);
   }
 
   private async isTableIdAllowedForResource(
     tableId: string,
     spaceIds: string[] | undefined,
-    baseIds: string[] | undefined
+    baseIds: string[] | undefined,
+    includeInactiveResource?: boolean
   ) {
-    const { spaceId, baseId } = await this.getUpperIdByTableId(tableId);
+    const { spaceId, baseId } = await this.getUpperIdByTableId(tableId, includeInactiveResource);
     return spaceIds?.includes(spaceId) || baseIds?.includes(baseId);
   }
 
-  async getPermissionsByAccessToken(resourceId: string, accessTokenId: string) {
-    const { scopes, spaceIds, baseIds } = await this.getAccessToken(accessTokenId);
+  async getPermissionsByAccessToken(
+    resourceId: string,
+    accessTokenId: string,
+    includeInactiveResource?: boolean
+  ) {
+    const { scopes, spaceIds, baseIds, hasFullAccess } = await this.getAccessToken(accessTokenId);
+
+    if (hasFullAccess) {
+      return scopes;
+    }
 
     if (
       !resourceId.startsWith(IdPrefix.Space) &&
       !resourceId.startsWith(IdPrefix.Base) &&
       !resourceId.startsWith(IdPrefix.Table)
     ) {
-      throw new ForbiddenException(`${resourceId} is not valid`);
+      throw new CustomHttpException(
+        `Resource ${resourceId} is not valid`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.invalidResource',
+          },
+        }
+      );
     }
 
     if (resourceId.startsWith(IdPrefix.Space) && !spaceIds?.includes(resourceId)) {
-      throw new ForbiddenException(`not allowed to space ${resourceId}`);
+      throw new CustomHttpException(
+        `You are not allowed to access space ${resourceId}`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedSpace',
+          },
+        }
+      );
+    }
+
+    // set the spaceId to the cls when the user operate in a space
+    if (resourceId.startsWith(IdPrefix.Space)) {
+      this.cls.set('spaceId', resourceId);
     }
 
     if (
       resourceId.startsWith(IdPrefix.Base) &&
-      !(await this.isBaseIdAllowedForResource(resourceId, spaceIds, baseIds))
+      !(await this.isBaseIdAllowedForResource(
+        resourceId,
+        spaceIds,
+        baseIds,
+        includeInactiveResource
+      ))
     ) {
-      throw new ForbiddenException(`not allowed to base ${resourceId}`);
+      throw new CustomHttpException(
+        `You are not allowed to access base ${resourceId}`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedBase',
+          },
+        }
+      );
     }
 
     if (
       resourceId.startsWith(IdPrefix.Table) &&
-      !(await this.isTableIdAllowedForResource(resourceId, spaceIds, baseIds))
+      !(await this.isTableIdAllowedForResource(
+        resourceId,
+        spaceIds,
+        baseIds,
+        includeInactiveResource
+      ))
     ) {
-      throw new ForbiddenException(`not allowed to table ${resourceId}`);
+      throw new CustomHttpException(
+        `You are not allowed to access table ${resourceId}`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedTables',
+            context: {
+              tableIds: resourceId,
+            },
+          },
+        }
+      );
     }
 
     return scopes;
   }
 
-  private async getPermissionBySpaceId(spaceId: string) {
-    const role = await this.getRoleBySpaceId(spaceId);
+  private async getPermissionBySpaceId(spaceId: string, includeInactiveResource?: boolean) {
+    const role = await this.getRoleBySpaceId(spaceId, includeInactiveResource);
+    if (!role) {
+      throw new CustomHttpException(
+        `you have no permission to access this space`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedSpace',
+          },
+        }
+      );
+    }
+    this.cls.set('spaceId', spaceId);
     return getPermissions(role);
   }
 
-  private async getPermissionByBaseId(baseId: string) {
+  private async getPermissionByBaseId(baseId: string, includeInactiveResource?: boolean) {
+    const tempAuthBaseId = this.cls.get('tempAuthBaseId');
+    if (tempAuthBaseId === baseId) {
+      const template = await this.templateModel.getTemplateRawByBaseId(baseId);
+      if (template) {
+        this.cls.set('template', {
+          id: template.id,
+          baseId: template.snapshot.baseId,
+        });
+        return TemplatePermissions;
+      } else {
+        return getPermissions('owner');
+      }
+    }
     const role = await this.getRoleByBaseId(baseId);
-    if (role) {
-      return getPermissions(role);
+    const spaceRole = await this.getRoleBySpaceId(
+      (await this.getUpperIdByBaseId(baseId, includeInactiveResource)).spaceId,
+      includeInactiveResource
+    );
+    if (!role && !spaceRole) {
+      throw new CustomHttpException(
+        `you have no permission to access this base`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.notAllowedBase',
+          },
+        }
+      );
     }
-    return this.getPermissionBySpaceId((await this.getUpperIdByBaseId(baseId)).spaceId);
+    const basePermissions = role ? getPermissions(role) : [];
+    const spacePermissions = spaceRole ? getPermissions(spaceRole) : [];
+    // In the presence of an organization, a user can have concurrent permissions at both space and base levels,
+    // requiring a merge operation to determine the highest applicable permission level
+    return union(basePermissions, spacePermissions);
   }
 
-  private async getPermissionByTableId(tableId: string) {
-    const baseId = (await this.getUpperIdByTableId(tableId)).baseId;
-    return this.getPermissionByBaseId(baseId);
+  private async getPermissionByTableId(tableId: string, includeInactiveResource?: boolean) {
+    const baseId = (await this.getUpperIdByTableId(tableId, includeInactiveResource)).baseId;
+    return this.getPermissionByBaseId(baseId, includeInactiveResource);
   }
 
-  async getPermissionsByResourceId(resourceId: string) {
+  async getPermissionsByResourceId(resourceId: string, includeInactiveResource?: boolean) {
     if (resourceId.startsWith(IdPrefix.Space)) {
-      return await this.getPermissionBySpaceId(resourceId);
+      return await this.getPermissionBySpaceId(resourceId, includeInactiveResource);
     } else if (resourceId.startsWith(IdPrefix.Base)) {
-      return await this.getPermissionByBaseId(resourceId);
+      return await this.getPermissionByBaseId(resourceId, includeInactiveResource);
     } else if (resourceId.startsWith(IdPrefix.Table)) {
-      return await this.getPermissionByTableId(resourceId);
+      return await this.getPermissionByTableId(resourceId, includeInactiveResource);
     } else {
-      throw new ForbiddenException('request path is not valid');
+      throw new CustomHttpException(
+        `Request path is not valid`,
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.invalidRequestPath',
+          },
+        }
+      );
     }
   }
 
-  async getPermissions(resourceId: string, accessTokenId?: string) {
-    const userPermissions = await this.getPermissionsByResourceId(resourceId);
+  async getPermissions(
+    resourceId: string,
+    accessTokenId?: string,
+    includeInactiveResource?: boolean
+  ) {
+    const userPermissions = await this.getPermissionsByResourceId(
+      resourceId,
+      includeInactiveResource
+    );
 
     if (accessTokenId) {
       const accessTokenPermission = await this.getPermissionsByAccessToken(
         resourceId,
-        accessTokenId
+        accessTokenId,
+        includeInactiveResource
       );
       return intersection(userPermissions, accessTokenPermission);
     }
     return userPermissions;
   }
 
-  async validPermissions(resourceId: string, permissions: Action[], accessTokenId?: string) {
-    const ownPermissions = await this.getPermissions(resourceId, accessTokenId);
+  async validPermissions(
+    resourceId: string,
+    permissions: Action[],
+    accessTokenId?: string,
+    includeInactiveResource?: boolean
+  ) {
+    const ownPermissions = await this.getPermissions(
+      resourceId,
+      accessTokenId,
+      includeInactiveResource
+    );
     if (permissions.every((permission) => ownPermissions.includes(permission))) {
       return ownPermissions;
     }
-    throw new ForbiddenException(
-      `not allowed to operate ${permissions.join(', ')} on ${resourceId}`
+    // for app token operation not allowed in template preview app
+    if (
+      this.cls.get('template') &&
+      this.cls.get('tempAuthBaseId') === this.cls.get('template.baseId')
+    ) {
+      throw new TemplateAppTokenNotAllowedException();
+    }
+    throw new CustomHttpException(
+      `not allowed to operate ${permissions.join(', ')} on ${resourceId}`,
+      HttpErrorCode.RESTRICTED_RESOURCE,
+      {
+        localization: {
+          i18nKey: notAllowedOperationI18nKey,
+        },
+      }
     );
+  }
+
+  private isAnonymous() {
+    return isAnonymous(this.cls.get('user.id'));
+  }
+
+  async getTemplatePermissions(resourceId: string) {
+    const deniedResourceError = new CustomHttpException(
+      `Template access denied, template not found for ${resourceId}`,
+      this.isAnonymous() ? HttpErrorCode.UNAUTHORIZED : HttpErrorCode.RESTRICTED_RESOURCE,
+      {
+        localization: {
+          i18nKey: 'httpErrors.base.templateNotFound',
+        },
+      }
+    );
+    if (resourceId.startsWith(IdPrefix.Base)) {
+      const template = await this.templateModel.getTemplateRawByBaseId(resourceId);
+      if (!template?.id) {
+        this.logger.error(`Template access denied, template not found for ${resourceId}`);
+        throw deniedResourceError;
+      }
+      this.cls.set('template', {
+        id: template.id,
+        baseId: template.snapshot.baseId,
+      });
+    } else if (resourceId.startsWith(IdPrefix.Table)) {
+      const table = await this.prismaService.txClient().tableMeta.findUnique({
+        where: {
+          id: resourceId,
+          deletedTime: null,
+          base: { deletedTime: null },
+        },
+        select: {
+          baseId: true,
+        },
+      });
+      if (!table) {
+        this.logger.error(`Template access denied, table not found for ${resourceId}`);
+        throw deniedResourceError;
+      }
+      const template = await this.templateModel.getTemplateRawByBaseId(table.baseId);
+      if (!template) {
+        this.logger.error(`Template access denied, template not found for ${resourceId}`);
+        throw deniedResourceError;
+      }
+      this.cls.set('template', {
+        id: template.id,
+        baseId: template.snapshot.baseId,
+      });
+    } else {
+      throw new CustomHttpException(
+        `Resource ${resourceId} is not valid for template`,
+        this.isAnonymous() ? HttpErrorCode.UNAUTHORIZED : HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.permission.invalidResource',
+          },
+        }
+      );
+    }
+    return TemplatePermissions;
+  }
+
+  async validTemplatePermissions(resourceId: string, permissions: Action[]) {
+    const template = this.cls.get('template');
+    const templatePermissions = template
+      ? TemplatePermissions
+      : await this.getTemplatePermissions(resourceId);
+    if (permissions.every((permission) => templatePermissions.includes(permission))) {
+      return templatePermissions;
+    }
+    throw new CustomHttpException(
+      `Template access denied, not allowed to operate ${permissions.join(', ')} on ${resourceId}`,
+      HttpErrorCode.RESTRICTED_RESOURCE,
+      {
+        localization: {
+          i18nKey: notAllowedOperationI18nKey,
+        },
+      }
+    );
+  }
+
+  getTemplateIdByHeader(templateHeader: string) {
+    try {
+      return this.jwtService.verify<{ templateId: string }>(templateHeader).templateId;
+    } catch {
+      return null;
+    }
+  }
+
+  generateTemplateHeader(templateId: string) {
+    return this.jwtService.sign({ templateId }, { expiresIn: '1d' });
+  }
+
+  // Base share permission methods
+  async getBaseShareInfo(shareId: string) {
+    const baseShare = await this.prismaService.baseShare.findFirst({
+      where: { shareId, enabled: true },
+    });
+    if (!baseShare) {
+      return null;
+    }
+    return baseShare;
+  }
+
+  async baseShareRequiresPassword(shareId: string) {
+    const baseShare = await this.prismaService.baseShare.findFirst({
+      where: { shareId, enabled: true },
+      select: { password: true },
+    });
+    return !!baseShare?.password;
+  }
+
+  async validateBaseSharePasswordToken(shareId: string, token: string) {
+    try {
+      const payload = await this.jwtService.verifyAsync<{ shareId: string; password: string }>(
+        token
+      );
+      if (payload.shareId !== shareId) {
+        return false;
+      }
+      const baseShare = await this.prismaService.baseShare.findFirst({
+        where: { shareId, enabled: true },
+        select: { password: true },
+      });
+      if (!baseShare?.password) {
+        return false;
+      }
+      return payload.password === baseShare.password;
+    } catch {
+      return false;
+    }
+  }
+
+  async getBaseSharePermissions(shareId: string, resourceId: string) {
+    const baseShare = await this.getBaseShareInfo(shareId);
+    if (!baseShare) {
+      throw new CustomHttpException(
+        `Base share ${shareId} is not found`,
+        HttpErrorCode.RESTRICTED_RESOURCE
+      );
+    }
+
+    const { baseId, nodeId } = baseShare;
+
+    this.logger.debug(
+      `[BaseShare] Checking permission for resource ${resourceId}, shareId: ${shareId}, baseId: ${baseId}, nodeId: ${nodeId}`
+    );
+
+    if (nodeId) {
+      // Node-level share: verify the resource belongs to the shared node subtree
+      const resourceBelongsToShare = await this.checkResourceBelongsToShare(
+        resourceId,
+        baseId,
+        nodeId
+      );
+
+      if (!resourceBelongsToShare) {
+        this.logger.warn(
+          `[BaseShare] Resource ${resourceId} is not accessible via share ${shareId}, baseId: ${baseId}, nodeId: ${nodeId}`
+        );
+        throw new CustomHttpException(
+          `Resource ${resourceId} is not accessible via share ${shareId}`,
+          HttpErrorCode.RESTRICTED_RESOURCE
+        );
+      }
+    }
+    // When nodeId is null (whole-base share), all resources in the base are accessible
+
+    // Set base share in cls for downstream services to use
+    this.cls.set('baseShare', { baseId, nodeId });
+
+    // When allowEdit is enabled and user is logged in, grant editor-level permissions
+    // excluding invite/share/privacy-sensitive actions
+    if (baseShare.allowEdit && !this.isAnonymous()) {
+      return getPermissions(Role.Editor).filter((p) => !SHARE_EXCLUDED_PERMISSIONS.has(p));
+    }
+
+    // Otherwise return template permissions (read-only), with record|copy if allowCopy is enabled
+    const permissions = [...TemplatePermissions];
+    if (baseShare.allowCopy) {
+      permissions.push('record|copy');
+    }
+    return permissions;
+  }
+
+  /**
+   * Check if a resource belongs to the shared base.
+   * Dispatches to specific check methods based on resource type.
+   */
+  private async checkResourceBelongsToShare(
+    resourceId: string,
+    baseId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    const prefix = resourceId.substring(0, 3);
+
+    switch (prefix) {
+      case IdPrefix.Base:
+        return resourceId === baseId;
+      case IdPrefix.Table:
+        return this.checkTableBelongsToShare(resourceId, baseId, nodeId);
+      case IdPrefix.View:
+        return this.checkViewBelongsToShare(resourceId, baseId, nodeId);
+      case IdPrefix.Field:
+        return this.checkFieldBelongsToShare(resourceId, baseId, nodeId);
+      case IdPrefix.App:
+        return this.checkAppBelongsToShare(resourceId, baseId, nodeId);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Check if a table belongs to the shared base and is allowed by nodeId.
+   */
+  private async checkTableBelongsToShare(
+    tableId: string,
+    baseId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    const table = await this.prismaService.tableMeta.findUnique({
+      where: { id: tableId, deletedTime: null },
+      select: { baseId: true },
+    });
+
+    this.logger.debug(
+      `[BaseShare] Table ${tableId} baseId: ${table?.baseId}, share baseId: ${baseId}`
+    );
+
+    if (!table || table.baseId !== baseId) {
+      return false;
+    }
+
+    const result = await this.isTableAllowedByNodeId(baseId, tableId, nodeId);
+    if (result) {
+      this.logger.debug(`[BaseShare] Table belongs check: nodeId=${nodeId}, result=${result}`);
+      return true;
+    }
+
+    // Fallback: check if the table is a foreign table of a link field in a shared table.
+    // This allows link field targets to be accessible even when they are outside the shared node.
+    const linkedResult = await this.isTableLinkedFromSharedNode(baseId, tableId, nodeId);
+    this.logger.debug(
+      `[BaseShare] Table linked from shared node check: tableId=${tableId}, result=${linkedResult}`
+    );
+    return linkedResult;
+  }
+
+  /**
+   * Check if a table is referenced as a foreign table by any link field
+   * in the shared node's tables. This allows link field foreign tables
+   * to be accessible even if they're not directly under the shared node.
+   */
+  private async isTableLinkedFromSharedNode(
+    baseId: string,
+    foreignTableId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    // Get all nodes (cached)
+    const allNodes = await this.getBaseNodesWithCache(baseId);
+    const allowedNodeIds = this.collectDescendantNodeIds(allNodes, nodeId);
+
+    // Collect table IDs that are under the shared node
+    const sharedTableIds: string[] = [];
+    for (const node of allNodes) {
+      if (
+        allowedNodeIds.has(node.id) &&
+        node.resourceType.toLowerCase() === 'table' &&
+        node.resourceId
+      ) {
+        sharedTableIds.push(node.resourceId);
+      }
+    }
+
+    if (sharedTableIds.length === 0) {
+      return false;
+    }
+
+    // Find link fields in shared tables
+    const linkFields = await this.prismaService.field.findMany({
+      where: {
+        tableId: { in: sharedTableIds },
+        type: 'link',
+        deletedTime: null,
+      },
+      select: {
+        options: true,
+      },
+    });
+
+    // Check if any link field references the target foreign table
+    return linkFields.some((field) => {
+      try {
+        const options = field.options ? JSON.parse(field.options) : null;
+        return options?.foreignTableId === foreignTableId;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /**
+   * Check if a view belongs to the shared base and is allowed by nodeId.
+   */
+  private async checkViewBelongsToShare(
+    viewId: string,
+    baseId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    const view = await this.prismaService.view.findUnique({
+      where: { id: viewId, deletedTime: null },
+      select: { tableId: true },
+    });
+
+    if (!view) {
+      return false;
+    }
+
+    return this.checkTableBelongsToShare(view.tableId, baseId, nodeId);
+  }
+
+  /**
+   * Check if a field belongs to the shared base and is allowed by nodeId.
+   */
+  private async checkFieldBelongsToShare(
+    fieldId: string,
+    baseId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    const field = await this.prismaService.field.findUnique({
+      where: { id: fieldId, deletedTime: null },
+      select: { tableId: true },
+    });
+
+    if (!field) {
+      return false;
+    }
+
+    return this.checkTableBelongsToShare(field.tableId, baseId, nodeId);
+  }
+
+  /**
+   * Check if an app belongs to the shared base and is allowed by nodeId.
+   */
+  private async checkAppBelongsToShare(
+    appId: string,
+    baseId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    const appNode = await this.prismaService.baseNode.findFirst({
+      where: {
+        baseId,
+        resourceType: { equals: 'app', mode: 'insensitive' },
+        resourceId: appId,
+      },
+    });
+
+    this.logger.debug(`[BaseShare] App ${appId} node found: ${!!appNode}, share baseId: ${baseId}`);
+
+    if (!appNode) {
+      return false;
+    }
+
+    const result = await this.isNodeAllowedByNodeId(baseId, appNode.id, nodeId);
+    this.logger.debug(`[BaseShare] App belongs check: nodeId=${nodeId}, result=${result}`);
+    return result;
+  }
+
+  /**
+   * Get base nodes with caching within the same request cycle.
+   * Uses cls to cache node data to avoid repeated database queries.
+   */
+  private async getBaseNodesWithCache(baseId: string) {
+    // Check if we have cached nodes for this base
+    const cache = this.cls.get('baseShareNodeCache') ?? new Map<string, IBaseNodeCacheItem[]>();
+    if (cache.has(baseId)) {
+      return cache.get(baseId)!;
+    }
+
+    // Query and cache the nodes
+    const allNodes = await this.prismaService.baseNode.findMany({
+      where: { baseId },
+      select: {
+        id: true,
+        parentId: true,
+        resourceType: true,
+        resourceId: true,
+      },
+    });
+
+    cache.set(baseId, allNodes);
+    this.cls.set('baseShareNodeCache', cache);
+    return allNodes;
+  }
+
+  /**
+   * Collect all descendant node IDs from a given nodeId (including the nodeId itself).
+   * Returns a Set of allowed node IDs.
+   */
+  private collectDescendantNodeIds(
+    allNodes: { id: string; parentId: string | null }[],
+    nodeId: string
+  ): Set<string> {
+    const allowedNodeIds = new Set<string>();
+    const collectDescendants = (currentNodeId: string) => {
+      allowedNodeIds.add(currentNodeId);
+      for (const node of allNodes) {
+        if (node.parentId === currentNodeId) {
+          collectDescendants(node.id);
+        }
+      }
+    };
+    collectDescendants(nodeId);
+    return allowedNodeIds;
+  }
+
+  /**
+   * Check if a node (by its BaseNode id) is allowed by nodeId (the shared node and its descendants).
+   * This determines if a resource is accessible via a base share with a specific nodeId.
+   */
+  private async isNodeAllowedByNodeId(
+    baseId: string,
+    targetNodeId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    this.logger.log(
+      `[BaseShare] isNodeAllowedByNodeId: targetNodeId=${targetNodeId}, nodeId=${nodeId}`
+    );
+
+    // Get all nodes in the base (with caching)
+    const allNodes = await this.getBaseNodesWithCache(baseId);
+
+    // Collect all descendant node IDs from the shared nodeId
+    const allowedNodeIds = this.collectDescendantNodeIds(allNodes, nodeId);
+
+    this.logger.log(
+      `[BaseShare] Allowed node IDs (shared + descendants): ${JSON.stringify([...allowedNodeIds])}`
+    );
+
+    // Check if the target node is in the allowed list
+    if (allowedNodeIds.has(targetNodeId)) {
+      this.logger.log(`[BaseShare] targetNodeId found in allowed nodes`);
+      return true;
+    }
+
+    this.logger.log(`[BaseShare] targetNodeId not found in allowed nodes`);
+    return false;
+  }
+
+  /**
+   * Check if a table is allowed by the given nodeId (the shared node and its descendants).
+   * nodeId is a base node ID (bno...) which have a mapping to tableIds via base_node.resourceId
+   */
+  private async isTableAllowedByNodeId(
+    baseId: string,
+    tableId: string,
+    nodeId: string
+  ): Promise<boolean> {
+    this.logger.log(`[BaseShare] isTableAllowedByNodeId: tableId=${tableId}, nodeId=${nodeId}`);
+
+    // Get all nodes in the base (with caching)
+    const allNodes = await this.getBaseNodesWithCache(baseId);
+
+    // Build a map for quick lookup
+    const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
+
+    // Collect all descendant node IDs from the shared nodeId
+    const allowedNodeIds = this.collectDescendantNodeIds(allNodes, nodeId);
+
+    this.logger.log(
+      `[BaseShare] Allowed node IDs (shared + descendants): ${JSON.stringify([...allowedNodeIds])}`
+    );
+
+    // Check if the shared node itself is a table with the target tableId
+    const sharedNode = nodeMap.get(nodeId);
+    if (
+      sharedNode &&
+      sharedNode.resourceType.toLowerCase() === 'table' &&
+      sharedNode.resourceId === tableId
+    ) {
+      this.logger.log(`[BaseShare] Shared node is the target table`);
+      return true;
+    }
+
+    // Check if tableId belongs to any of the allowed nodes
+    for (const allowedId of allowedNodeIds) {
+      const node = nodeMap.get(allowedId);
+      if (node && node.resourceType.toLowerCase() === 'table' && node.resourceId === tableId) {
+        this.logger.log(`[BaseShare] tableId found in allowed descendant nodes`);
+        return true;
+      }
+    }
+
+    this.logger.log(`[BaseShare] tableId not found in allowed nodes`);
+    return false;
+  }
+
+  async validBaseSharePermissions(shareId: string, resourceId: string, permissions: Action[]) {
+    const sharePermissions = await this.getBaseSharePermissions(shareId, resourceId);
+    if (permissions.every((permission) => sharePermissions.includes(permission))) {
+      return sharePermissions;
+    }
+    throw new CustomHttpException(
+      `Base share access denied, not allowed to operate ${permissions.join(', ')} on ${resourceId}`,
+      HttpErrorCode.RESTRICTED_RESOURCE,
+      {
+        localization: {
+          i18nKey: notAllowedOperationI18nKey,
+        },
+      }
+    );
+  }
+
+  /**
+   * Extract the shareId from the X-Tea-Base-Share header.
+   * The header contains the plain shareId set by the frontend (initAxios / SsrApi).
+   *
+   * Note: Password authentication is handled separately via JWT cookie:
+   * - When a share has a password, the user authenticates via POST /share/:shareId/base/auth
+   * - A JWT cookie containing { shareId, password } is set for 7 days
+   * - On subsequent requests, ensureBaseShareAuth validates the cookie by comparing the
+   *   password in the JWT with the current DB password (see validateBaseSharePasswordToken).
+   * - If the admin changes the password, the old JWT cookie's password won't match,
+   *   causing the user to be redirected to the auth page automatically.
+   */
+  getBaseShareIdByHeader(shareHeader: string): string | null {
+    if (!shareHeader || !shareHeader.startsWith('shr')) {
+      return null;
+    }
+    return shareHeader;
   }
 }

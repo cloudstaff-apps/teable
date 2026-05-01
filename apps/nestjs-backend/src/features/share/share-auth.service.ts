@@ -1,13 +1,21 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { IViewVo, IShareViewMeta } from '@teable/core';
+import { FieldType, HttpErrorCode, isAnonymous } from '@teable/core';
+import type { IViewVo, IShareViewMeta, ILinkFieldOptions } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
+import { ClsService } from 'nestjs-cls';
+import { CustomHttpException } from '../../custom.exception';
+import type { IClsStore } from '../../types/cls';
+import { PermissionService } from '../auth/permission.service';
+import { createFieldInstanceByRaw } from '../field/model/factory';
 import { createViewVoByRaw } from '../view/model/factory';
 
 export interface IShareViewInfo {
   shareId: string;
   tableId: string;
-  view: IViewVo;
+  view?: IViewVo;
+  linkOptions?: Pick<ILinkFieldOptions, 'filterByViewId' | 'visibleFieldIds' | 'filter'>;
+  shareMeta?: IShareViewMeta;
 }
 
 export interface IJwtShareInfo {
@@ -18,8 +26,10 @@ export interface IJwtShareInfo {
 @Injectable()
 export class ShareAuthService {
   constructor(
+    private readonly permissionService: PermissionService,
     private readonly prismaService: PrismaService,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly cls: ClsService<IClsStore>
   ) {}
 
   async validateJwtToken(token: string) {
@@ -41,7 +51,15 @@ export class ShareAuthService {
     const shareMeta = view.shareMeta ? (JSON.parse(view.shareMeta) as IShareViewMeta) : undefined;
     const password = shareMeta?.password;
     if (!password) {
-      throw new BadRequestException('Password restriction is not enabled');
+      throw new CustomHttpException(
+        'Password restriction is not enabled',
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.shareAuth.passwordRestrictionNotEnabled',
+          },
+        }
+      );
     }
     return pass === password ? shareId : null;
   }
@@ -55,13 +73,93 @@ export class ShareAuthService {
       where: { shareId, enableShare: true, deletedTime: null },
     });
     if (!view) {
-      throw new BadRequestException('share view not found');
+      throw new CustomHttpException('Share view not found', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.shareAuth.shareViewNotFound',
+        },
+      });
     }
-
+    const viewVo = createViewVoByRaw(view);
     return {
       shareId,
       tableId: view.tableId,
       view: createViewVoByRaw(view),
+      shareMeta: viewVo.shareMeta,
+    };
+  }
+
+  async getLinkViewInfo(linkFieldId: string, templateHeader?: string): Promise<IShareViewInfo> {
+    const fieldRaw = await this.prismaService.field
+      .findFirstOrThrow({
+        where: {
+          id: linkFieldId,
+          deletedTime: null,
+        },
+      })
+      .catch((_err) => {
+        throw new CustomHttpException(
+          `Link field ${linkFieldId} not exist`,
+          HttpErrorCode.NOT_FOUND,
+          {
+            localization: {
+              i18nKey: 'httpErrors.shareAuth.linkFieldNotFound',
+            },
+          }
+        );
+      });
+
+    const field = createFieldInstanceByRaw(fieldRaw);
+    if (field.type !== FieldType.Link) {
+      throw new CustomHttpException(
+        'Field is not a link field',
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.share.fieldTypeNotLinkField',
+          },
+        }
+      );
+    }
+
+    if (templateHeader) {
+      const templateId = this.permissionService.getTemplateIdByHeader(templateHeader);
+      if (!templateId) {
+        throw new CustomHttpException(
+          `Template header is invalid`,
+          HttpErrorCode.RESTRICTED_RESOURCE,
+          {
+            localization: {
+              i18nKey: 'httpErrors.permission.templateHeaderInvalid',
+            },
+          }
+        );
+      }
+    }
+    if (templateHeader || isAnonymous(this.cls.get('user.id'))) {
+      await this.permissionService.validTemplatePermissions(fieldRaw.tableId, [
+        'table|read',
+        'record|read',
+        'field|read',
+      ]);
+    } else {
+      // make sure user has permission to access the table where the link field from
+      await this.permissionService.validPermissions(fieldRaw.tableId, [
+        'table|read',
+        'record|read',
+        'field|read',
+      ]);
+    }
+
+    const { filterByViewId, visibleFieldIds, filter } = field.options;
+
+    return {
+      shareId: linkFieldId,
+      tableId: field.options.foreignTableId,
+      linkOptions: { filterByViewId, visibleFieldIds, filter },
+      shareMeta: {
+        allowCopy: true,
+        includeRecords: true,
+      },
     };
   }
 }

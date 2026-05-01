@@ -5,6 +5,13 @@ const windowsNewline = '\r\n';
 // eslint-disable-next-line sonarjs/cognitive-complexity
 export const parseClipboardText = (content: string) => {
   const _newline = content.includes(windowsNewline) ? windowsNewline : newline;
+  // remove the last newline or windows newline
+  if (content.endsWith(_newline)) {
+    content = content.slice(0, -1 * _newline.length);
+  }
+  if (content.startsWith(_newline)) {
+    content = content.slice(_newline.length);
+  }
   if (!content.includes('"')) {
     return content.split(_newline).map((row) => row.split(delimiter));
   }
@@ -54,12 +61,18 @@ export const parseClipboardText = (content: string) => {
           endOfCell = true;
           break;
         }
-      } else if (content[cursor] === _newline) {
+      } else if (
+        content[cursor] === _newline ||
+        `${content[cursor]}${content[cursor + 1]}` === _newline
+      ) {
         if (quoted) {
           cell += _newline;
         } else {
           endOfCell = true;
           endOfRow = true;
+        }
+        if (`${content[cursor]}${content[cursor + 1]}` === _newline) {
+          cursor++;
         }
       } else {
         cell += content[cursor];

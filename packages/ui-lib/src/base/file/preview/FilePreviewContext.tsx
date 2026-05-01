@@ -13,6 +13,7 @@ export type IFileId = number | string;
 
 export interface IFileItemInner extends IFileItemBase {
   fileId: IFileId;
+  onClose?: () => void;
 }
 
 export interface IFileItem extends IFileItemBase {
@@ -29,4 +30,5 @@ export const FilePreviewContext = createContext<{
   onPrev: () => void;
   onNext: () => void;
   onDelete: (fileId: IFileId) => void;
+  i18nMap?: Record<string, string>;
 }>(null!);

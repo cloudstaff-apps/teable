@@ -2,25 +2,44 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import type { StatisticsFunc } from '@teable/core';
 import { getValidStatisticFunc } from '@teable/core';
 import type {
+  ISearchIndexByQueryRo,
   IAggregationRo,
   IAggregationVo,
+  ICalendarDailyCollectionRo,
+  ICalendarDailyCollectionVo,
   IGroupPointsRo,
   IGroupPointsVo,
   IQueryBaseRo,
   IRowCountVo,
+  ISearchCountRo,
+  IRecordIndexRo,
+  IRecordIndexVo,
 } from '@teable/openapi';
 import { forIn, isEmpty, map } from 'lodash';
-import type { IWithView } from '../aggregation.service';
-import { AggregationService } from '../aggregation.service';
+import { IAggregationService } from '../aggregation.service.interface';
+import type { IWithView } from '../aggregation.service.interface';
+import { InjectAggregationService } from '../aggregation.service.provider';
 
 @Injectable()
 export class AggregationOpenApiService {
-  constructor(private readonly aggregationService: AggregationService) {}
+  constructor(
+    @InjectAggregationService() private readonly aggregationService: IAggregationService
+  ) {}
 
   async getAggregation(tableId: string, query?: IAggregationRo): Promise<IAggregationVo> {
-    const { viewId, filter: customFilter, field: aggregationFields } = query || {};
+    const {
+      viewId,
+      filter: customFilter,
+      field: aggregationFields,
+      groupBy,
+      ignoreViewQuery,
+    } = query || {};
 
-    let withView: IWithView = { viewId, customFilter };
+    let withView: IWithView = {
+      viewId: ignoreViewQuery ? undefined : viewId,
+      customFilter,
+      groupBy,
+    };
 
     const fieldStatistics: Array<{ fieldId: string; statisticFunc: StatisticsFunc }> = [];
 
@@ -42,6 +61,7 @@ export class AggregationOpenApiService {
       tableId: tableId,
       withView,
       search: query?.search,
+      useQueryModel: true,
     });
     return { aggregations: result?.aggregations };
   }
@@ -53,8 +73,23 @@ export class AggregationOpenApiService {
     };
   }
 
-  async getGroupPoints(tableId: string, query?: IGroupPointsRo): Promise<IGroupPointsVo> {
-    return await this.aggregationService.getGroupPoints(tableId, query);
+  async getGroupPoints(
+    tableId: string,
+    query?: IGroupPointsRo,
+    useQueryModel = true
+  ): Promise<IGroupPointsVo> {
+    return await this.aggregationService.getGroupPoints(tableId, query, useQueryModel);
+  }
+
+  async getCalendarDailyCollection(
+    tableId: string,
+    query: ICalendarDailyCollectionRo
+  ): Promise<ICalendarDailyCollectionVo> {
+    return await this.aggregationService.getCalendarDailyCollection(tableId, query);
+  }
+
+  async getRecordIndex(tableId: string, query: IRecordIndexRo): Promise<IRecordIndexVo> {
+    return await this.aggregationService.getRecordIndex(tableId, query);
   }
 
   private async validFieldStats(
@@ -85,5 +120,17 @@ export class AggregationOpenApiService {
       (result = result ?? []).push({ fieldId, statisticFunc });
     });
     return result;
+  }
+
+  public async getSearchCount(tableId: string, queryRo: ISearchCountRo, projection?: string[]) {
+    return await this.aggregationService.getSearchCount(tableId, queryRo, projection);
+  }
+
+  public async getRecordIndexBySearchOrder(
+    tableId: string,
+    queryRo: ISearchIndexByQueryRo,
+    projection?: string[]
+  ) {
+    return await this.aggregationService.getRecordIndexBySearchOrder(tableId, queryRo, projection);
   }
 }

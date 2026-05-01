@@ -21,15 +21,15 @@ export const DateOptions = (props: {
 
   const onDefaultValueChange = (checked: boolean) => {
     onChange?.({
-      defaultValue: checked ? 'now' : undefined,
+      defaultValue: checked ? 'now' : null,
     });
   };
 
   return (
-    <div className="form-control w-full space-y-2">
+    <div className="form-control w-full space-y-4">
       <DatetimeFormatting onChange={onFormattingChange} formatting={options.formatting} />
       {!isLookup && (
-        <div className="flex items-center space-x-2">
+        <div className="flex h-8 items-center space-x-2">
           <Switch
             id="field-options-auto-fill"
             checked={Boolean(defaultValue)}

@@ -1,32 +1,40 @@
 #!/usr/bin/env zx
-import { parseDsn as parse } from '@soluble/dsn-parser';
+import 'zx/globals'
 
 const env = $.env;
 let isCi = ['true', '1'].includes(env?.CI ?? '');
 
-const buildVersion = env.BUILD_VERSION;
 const databaseUrl = env.PRISMA_DATABASE_URL;
 
 const parseDsn = (dsn) => {
-  const parsedDsn = parse(dsn);
+  try {
+    const url = new URL(dsn);
+    const driver = url.protocol.replace(':', '');
+    
+    if (!['postgresql', 'postgres'].includes(driver)) {
+      throw new Error(`Unsupported database driver: ${driver}`);
+    }
 
-  if (!parsedDsn.success) {
-    throw new Error(`DATABASE_URL ${parsedDsn.reason}`);
+    return {
+      driver,
+      host: url.hostname,
+      port: parseInt(url.port, 10),
+    };
+  } catch (error) {
+    throw new Error(`Invalid DATABASE_URL: ${error.message}`);
   }
-  if (!parsedDsn.value.port) {
-    throw new Error(`DATABASE_URL must provide a port`);
-  }
-
-  return parsedDsn.value;
 };
 
 const pgMigrate = async () => {
-  cd('postgres_migrate');
-  return await $`prisma migrate deploy`;
+  console.log('Current working directory:', process.cwd());
+  console.log('Running migration...');
+  const result = await $({cwd: '/app/packages/db-main-prisma'})`npx prisma migrate deploy --schema ./prisma/postgres/schema.prisma`;
+  console.log('Migration command completed:', result);
+  return result;
 };
 
 const killMe = async () => {
-  await $`exit 0`;
+  await $`exit 1`;
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -46,9 +54,7 @@ const retryOperation = async (operation, maxRetries = 5, delay = 3000) => {
   }
 };
 
-console.log(`DB Migrate Version: ${buildVersion}`);
-await $`prisma -v`;
-
+console.log(`DB Migrate Starting...`);
 const { driver, host, port } = parseDsn(databaseUrl);
 
 const adapters = {
@@ -64,15 +70,6 @@ console.log(`wait-for  ${host}:${port} 【${driver}】deploying.`);
 
 try {
   await retryOperation(async () => {
-    const result =
-    await $`scripts/wait-for ${host}:${port} --timeout=15 -- echo 'database driver:【${driver}】started successfully.'`;
-    if (result.exitCode !== 0) {
-      console.error(`database driver:【${driver}】, startup exception is about to exit.`);
-      throw new Error(result.stderr);
-    }
-
-    console.log(`database driver:【${driver}】, ready to start migration.`);
-
     await adapters[driver]();
     console.log(`database driver:【${driver}】, migration success.`);
   });

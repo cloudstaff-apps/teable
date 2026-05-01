@@ -1,5 +1,8 @@
+import { Plus } from '@teable/icons';
+import { Button } from '@teable/ui-lib/shadcn';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useTranslation } from 'next-i18next';
+import { Trans, useTranslation } from 'next-i18next';
 import { useMemo } from 'react';
 import { useInitializationZodI18n } from '@/features/app/hooks/useInitializationZodI18n';
 import { oauthAppConfig } from '@/features/i18n/oauth-app.config';
@@ -14,6 +17,7 @@ export type IFormType = 'new' | 'edit';
 export const OAuthAppPage = () => {
   const router = useRouter();
   const formType = router.query.form as IFormType;
+  const clientId = router.query.id as string;
   const { t } = useTranslation(oauthAppConfig.i18nNamespaces);
   useInitializationZodI18n();
 
@@ -32,6 +36,27 @@ export const OAuthAppPage = () => {
     }
   }, [formType, t]);
 
+  const description = useMemo(() => {
+    if (formType) {
+      return undefined;
+    }
+    return (
+      <Trans
+        ns="oauth"
+        i18nKey="title.description"
+        components={{
+          a: (
+            <Link
+              href={t('oauth:help.link')}
+              className="text-violet-500 underline underline-offset-4"
+              target="_blank"
+            />
+          ),
+        }}
+      />
+    );
+  }, [formType, t]);
+
   const FormPage = useMemo(() => {
     const onBack = () => {
       router.push({ pathname: router.pathname });
@@ -40,17 +65,50 @@ export const OAuthAppPage = () => {
       case 'new':
         return <OAuthAppNew onBack={onBack} />;
       case 'edit':
-        return <OAuthAppEdit onBack={onBack} />;
+        return <OAuthAppEdit clientId={clientId} onBack={onBack} />;
       default:
-        return <OAuthAppList />;
+        return (
+          <OAuthAppList
+            onEdit={(id) =>
+              router.push({
+                pathname: router.pathname,
+                query: { form: 'edit', id },
+              })
+            }
+          />
+        );
     }
-  }, [formType, router]);
+  }, [formType, router, clientId]);
 
   return (
     <SettingRight
-      title={<SettingRightTitle title={title} onBack={formType ? onBack : undefined} />}
+      header={
+        <SettingRightTitle
+          title={title}
+          onBack={formType ? onBack : undefined}
+          description={description}
+          className="h-auto items-center gap-x-2"
+          titleClassName="text-lg font-medium"
+        />
+      }
+      actions={
+        !formType ? (
+          <Button
+            size="xs"
+            onClick={() =>
+              router.push({
+                pathname: router.pathname,
+                query: { form: 'new' },
+              })
+            }
+          >
+            <Plus className="size-4 shrink-0" />
+            {t('oauth:add')}
+          </Button>
+        ) : undefined
+      }
     >
-      <div className="my-3 space-y-1">{FormPage}</div>
+      <div className="space-y-1">{FormPage}</div>
     </SettingRight>
   );
 };

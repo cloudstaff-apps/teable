@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { FieldType, CellValueType } from '../constant';
+import type { IFieldVisitor } from '../field-visitor.interface';
 import { SelectFieldCore } from './abstract/select.field.abstract';
 
 export const singleSelectCelValueSchema = z.string();
@@ -20,7 +21,7 @@ export class SingleSelectFieldCore extends SelectFieldCore {
       return null;
     }
 
-    const cellValue = String(value).replace(/\n|\r/g, ' ');
+    const cellValue = String(value).replace(/\n|\r/g, ' ').trim();
     if (shouldExtend) {
       return cellValue;
     }
@@ -37,10 +38,19 @@ export class SingleSelectFieldCore extends SelectFieldCore {
       return null;
     }
 
+    if (Array.isArray(value)) {
+      const firstValidValue = value.find((item): item is string => typeof item === 'string');
+      return firstValidValue == null ? null : this.convertStringToCellValue(firstValidValue);
+    }
+
     if (typeof value === 'string') {
       return this.convertStringToCellValue(value);
     }
 
     return null;
+  }
+
+  accept<T>(visitor: IFieldVisitor<T>): T {
+    return visitor.visitSingleSelectField(this);
   }
 }

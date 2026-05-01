@@ -2,7 +2,12 @@
   "auth": {
     "title": "输入您的密码查看此页面",
     "submit": "提交",
-    "password": "密码"
+    "password": "密码",
+    "passwordTooShort": "密码长度至少为3个字符"
+  },
+  "form": {
+    "requireLoginTip": "此表单需要登录后才能提交",
+    "login": "登录"
   },
   "toolbar": {
     "filterLinkSelectPlaceholder": "请选择..."

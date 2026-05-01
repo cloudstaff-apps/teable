@@ -1,5 +1,5 @@
 import type { DehydratedState } from '@tanstack/react-query';
-import { Admin, Settings } from '@teable/icons';
+import { Settings, LayoutTemplate as TemplateIcon, ShieldUser } from '@teable/icons';
 import type { IUser } from '@teable/sdk';
 import { SessionProvider } from '@teable/sdk';
 import { AppProvider } from '@teable/sdk/context';
@@ -34,6 +34,12 @@ export const AdminLayout: React.FC<{
       route: '/admin/setting',
       pathTo: '/admin/setting',
     },
+    {
+      Icon: TemplateIcon,
+      label: t('settings.templateAdmin.title'),
+      route: '/admin/template',
+      pathTo: '/admin/template',
+    },
   ];
 
   return (
@@ -48,7 +54,7 @@ export const AdminLayout: React.FC<{
               headerLeft={
                 <SidebarHeaderLeft
                   title={t('noun.adminPanel')}
-                  icon={<Admin className="size-5 shrink-0" />}
+                  icon={<ShieldUser className="size-5 shrink-0" />}
                   onBack={onBack}
                 />
               }

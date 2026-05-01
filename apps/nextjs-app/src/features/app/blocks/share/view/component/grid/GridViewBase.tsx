@@ -1,14 +1,16 @@
 import { useMutation } from '@tanstack/react-query';
-import type { IGridViewOptions, IFilter } from '@teable/core';
-import { RowHeightLevel, mergeFilter } from '@teable/core';
-import type { IGetRecordsRo, IRangesRo } from '@teable/openapi';
-import { shareViewCopy } from '@teable/openapi';
+import type { IGridViewOptions } from '@teable/core';
+import { RowHeightLevel } from '@teable/core';
+import type { IGetRecordsRo, IGroupPointsVo, IRangesRo } from '@teable/openapi';
+import { saveQueryParams, shareViewCopy } from '@teable/openapi';
 import type {
   CombinedSelection,
+  IButtonCell,
   ICell,
   ICellItem,
   IGridRef,
   IGroupPoint,
+  IPosition,
   IRectangle,
 } from '@teable/sdk/components';
 import {
@@ -29,9 +31,13 @@ import {
   generateLocalId,
   useGridTooltipStore,
   RegionType,
+  useGridViewStore,
+  LARGE_QUERY_THRESHOLD,
 } from '@teable/sdk/components';
+import { ShareViewContext } from '@teable/sdk/context';
 import {
-  useGroupPoint,
+  useButtonClickStatus,
+  useFields,
   useIsHydrated,
   useIsTouchDevice,
   useRowCount,
@@ -41,83 +47,127 @@ import {
   useTableId,
   useView,
 } from '@teable/sdk/hooks';
-import { Skeleton, useToast } from '@teable/ui-lib/shadcn';
+import { Skeleton } from '@teable/ui-lib/shadcn';
+import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { uniqueId } from 'lodash';
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useClickAway } from 'react-use';
-import { StatisticMenu } from '@/features/app/blocks/view/grid/components';
 import { DomBox } from '@/features/app/blocks/view/grid/DomBox';
-import { ExpandRecordContainer } from '@/features/app/components/ExpandRecordContainer';
-import type { IExpandRecordContainerRef } from '@/features/app/components/ExpandRecordContainer/types';
-import { useHiddenFields } from '@/features/app/hooks/useHiddenFields';
-import { GIRD_ROW_HEIGHT_DEFINITIONS } from '../../../../view/grid/const';
+import { useGridSearchStore } from '@/features/app/blocks/view/grid/useGridSearchStore';
+import { computeFrozenColumnCount } from '@/features/app/blocks/view/grid/utils/computeFrozenFields';
+import { ExpandRecordContainer } from '@/features/app/components/expand-record-container';
+import type { IExpandRecordContainerRef } from '@/features/app/components/expand-record-container/types';
+import { tableConfig } from '@/features/i18n/table.config';
+import {
+  GIRD_FIELD_NAME_HEIGHT_DEFINITIONS,
+  GIRD_ROW_HEIGHT_DEFINITIONS,
+} from '../../../../view/grid/const';
 import { useSelectionOperation } from '../../../../view/grid/hooks';
-import { useGridViewStore } from '../../../../view/grid/store/gridView';
 
-export const GridViewBase = () => {
+interface IGridViewProps {
+  groupPointsServerData?: IGroupPointsVo;
+}
+
+export const GridViewBase = (props: IGridViewProps) => {
+  const { groupPointsServerData } = props;
+  const { t } = useTranslation(tableConfig.i18nNamespaces);
   const view = useView();
-  const tableId = useTableId();
+  const tableId = useTableId() as string;
+  const { shareId } = useContext(ShareViewContext);
   const router = useRouter();
   const isHydrated = useIsHydrated();
-  const groupPoints = useGroupPoint();
   const gridRef = useRef<IGridRef>(null);
   const container = useRef<HTMLDivElement>(null);
   const expandRecordRef = useRef<IExpandRecordContainerRef>(null);
-  const { toast } = useToast();
   const theme = useGridTheme();
   const rowCount = useRowCount();
   const ssrRecords = useSSRRecords();
   const ssrRecord = useSSRRecord();
   const isTouchDevice = useIsTouchDevice();
-  const { setSelection, openStatisticMenu } = useGridViewStore();
+  const { setSelection, openStatisticMenu, openGroupHeaderMenu, openHeaderMenu } =
+    useGridViewStore();
   const { columns: originalColumns, cellValue2GridDisplay } = useGridColumns();
   const { columns, onColumnResize } = useGridColumnResize(originalColumns);
   const { columnStatistics } = useGridColumnStatistics(columns);
   const { onColumnOrdered } = useGridColumnOrder();
   const { searchQuery: search } = useSearch();
-  const hiddenFields = useHiddenFields();
+  const visibleFields = useFields();
+  const allFields = useFields({ withHidden: true });
   const customIcons = useGridIcons();
   const { openTooltip, closeTooltip } = useGridTooltipStore();
+  const { setGridRef, searchCursor } = useGridSearchStore();
+  const buttonClickStatusHook = useButtonClickStatus(tableId, shareId);
 
   const prepare = isHydrated && view && columns.length;
-  const { filter, sort, group } = view ?? {};
+  const { filter, sort } = view ?? {};
   const realRowCount = rowCount ?? ssrRecords?.length ?? 0;
+  const {
+    rowHeight: rowHeightLevel = RowHeightLevel.Short,
+    fieldNameDisplayLines = 1,
+    frozenFieldId,
+    frozenColumnCount: frozenColumnCountOption,
+  } = (view?.options ?? {}) as IGridViewOptions;
+  const rowHeight = GIRD_ROW_HEIGHT_DEFINITIONS[rowHeightLevel];
+  const columnHeaderHeight = GIRD_FIELD_NAME_HEIGHT_DEFINITIONS[fieldNameDisplayLines];
+
+  const frozenColumnCount = useMemo(() => {
+    return computeFrozenColumnCount({
+      isTouchDevice,
+      frozenFieldId,
+      frozenColumnCount: frozenColumnCountOption,
+      visibleColumns: columns,
+      allFields,
+    });
+  }, [isTouchDevice, frozenFieldId, columns, allFields, frozenColumnCountOption]);
 
   const groupCollection = useGridGroupCollection();
 
-  const { viewGroupQuery, collapsedGroupIds, onCollapsedGroupChanged } = useGridCollapsedGroup(
-    generateLocalId(tableId, view?.id),
-    groupPoints
-  );
+  useEffect(() => {
+    setGridRef(gridRef);
+  }, [setGridRef]);
+
+  const {
+    viewQuery: viewQueryWithGroup,
+    collapsedGroupIds,
+    onCollapsedGroupChanged,
+  } = useGridCollapsedGroup(generateLocalId(tableId, view?.id));
 
   const { mutateAsync: copyReq } = useMutation({
-    mutationFn: (copyRo: IRangesRo) =>
-      shareViewCopy(router.query.shareId as string, {
-        ...copyRo,
+    mutationFn: async (copyRo: IRangesRo) => {
+      const collapsedGroupIds = viewQueryWithGroup?.collapsedGroupIds;
+      const { collapsedGroupIds: originalCollapsedGroupIds, ...rest } = copyRo;
+      const params = {
+        ...rest,
         orderBy: view?.sort?.sortObjs,
         groupBy: view?.group,
-        filter: mergeFilter(view?.filter, viewGroupQuery?.filter),
+        filter: view?.filter,
         search,
-        excludeFieldIds: hiddenFields.map((field) => field.id),
-      }),
+        projection: visibleFields.map((field) => field.id),
+      };
+      if (collapsedGroupIds && collapsedGroupIds.length > LARGE_QUERY_THRESHOLD) {
+        const { data } = await saveQueryParams({ params: { collapsedGroupIds } });
+        return shareViewCopy(shareId, { ...params, queryId: data.queryId });
+      }
+      return shareViewCopy(shareId, { ...params, collapsedGroupIds });
+    },
   });
-  const { copy } = useSelectionOperation({ copyReq });
+  const { copy } = useSelectionOperation({
+    copyReq,
+    collapsedGroupIds: collapsedGroupIds ? Array.from(collapsedGroupIds) : undefined,
+  });
 
   const viewQuery = useMemo(() => {
-    const mergedFilter = mergeFilter(filter, viewGroupQuery?.filter);
     return {
-      filter: mergedFilter as IFilter,
+      filter,
       orderBy: sort?.sortObjs as IGetRecordsRo['orderBy'],
-      groupBy: group as IGetRecordsRo['groupBy'],
+      ...viewQueryWithGroup,
     };
-  }, [filter, viewGroupQuery?.filter, sort?.sortObjs, group]);
+  }, [filter, sort?.sortObjs, viewQueryWithGroup]);
 
-  const { onVisibleRegionChanged, recordMap } = useGridAsyncRecords(
-    ssrRecords,
-    undefined,
-    viewQuery
-  );
+  const { recordMap, groupPoints, searchHitIndex, allGroupHeaderRefs, onVisibleRegionChanged } =
+    useGridAsyncRecords(ssrRecords, undefined, viewQuery, groupPointsServerData);
 
   useClickAway(container, () => {
     gridRef.current?.resetState();
@@ -148,16 +198,20 @@ export const GridViewBase = () => {
     );
   };
 
-  const rowHeightLevel = useMemo(() => {
-    if (view == null) return RowHeightLevel.Short;
-    return (view.options as IGridViewOptions)?.rowHeight || RowHeightLevel.Short;
-  }, [view]);
-
   const onSelectionChanged = useCallback(
     (selection: CombinedSelection) => {
       setSelection(selection);
     },
     [setSelection]
+  );
+
+  const onColumnFreeze = useCallback(
+    (count: number) => {
+      const anchorId = columns[Math.max(0, count - 1)]?.id;
+      if (!view || !anchorId) return;
+      view.updateOption({ frozenFieldId: anchorId });
+    },
+    [view, columns]
   );
 
   const rowControls = useMemo(
@@ -181,23 +235,23 @@ export const GridViewBase = () => {
       if (record !== undefined) {
         const fieldId = columns[colIndex]?.id;
         if (!fieldId) return { type: CellType.Loading };
-        return cellValue2GridDisplay(record, colIndex);
+        return cellValue2GridDisplay(record, colIndex, false, undefined, buttonClickStatusHook);
       }
       return { type: CellType.Loading };
     },
-    [recordMap, columns, cellValue2GridDisplay]
+    [recordMap, columns, cellValue2GridDisplay, buttonClickStatusHook]
   );
 
   const onCopy = useCallback(
     async (selection: CombinedSelection) => {
       const allowCopy = view?.shareMeta?.allowCopy;
       if (!allowCopy) {
-        toast({ title: "Sorry, the table's owner has disabled copying" });
+        toast.warning("Sorry, the table's owner has disabled copying");
         return;
       }
       await copy(selection);
     },
-    [copy, view?.shareMeta?.allowCopy, toast]
+    [copy, view?.shareMeta?.allowCopy]
   );
 
   const onColumnStatisticClick = useCallback(
@@ -208,6 +262,29 @@ export const GridViewBase = () => {
     },
     [columns, openStatisticMenu]
   );
+
+  const onCellValueHovered = (bounds: IRectangle, cellItem: ICellItem) => {
+    const cellInfo = getCellContent(cellItem);
+    if (!cellInfo?.id) {
+      return;
+    }
+
+    if (cellInfo.type === CellType.Button) {
+      const { data } = cellInfo as IButtonCell;
+      const { fieldOptions, cellValue } = data;
+      const { label } = fieldOptions;
+      const count = cellValue?.count ?? 0;
+      const maxCount = fieldOptions?.maxCount ?? 0;
+      openTooltip({
+        id: componentId,
+        text: t('sdk:common.clickedCount', {
+          label,
+          text: maxCount > 0 ? `${count}/${maxCount}` : `${count}`,
+        }),
+        position: bounds,
+      });
+    }
+  };
 
   const componentId = useMemo(() => uniqueId('shared-grid-view-'), []);
 
@@ -224,7 +301,67 @@ export const GridViewBase = () => {
         position: bounds,
       });
     }
+
+    if (type === RegionType.CellValue) {
+      onCellValueHovered(bounds, cellItem);
+    }
   };
+
+  const onGroupHeaderContextMenu = (groupId: string, position: IPosition) => {
+    openGroupHeaderMenu({
+      groupId,
+      position,
+      allGroupHeaderRefs,
+    });
+  };
+
+  const onColumnHeaderMenuClick = useCallback(
+    (colIndex: number, bounds: IRectangle) => {
+      const fieldId = columns[colIndex].id;
+      const { x, height } = bounds;
+      const selectedFields = visibleFields.filter((field) => field.id === fieldId);
+      openHeaderMenu({
+        fields: selectedFields,
+        position: { x, y: height },
+      });
+    },
+    [columns, visibleFields, openHeaderMenu]
+  );
+
+  const onColumnHeaderClick = useCallback(
+    (colIndex: number, bounds: IRectangle) => {
+      if (!isTouchDevice) return;
+      const fieldId = columns[colIndex].id;
+      const { x, height } = bounds;
+      const selectedFields = visibleFields.filter((field) => field.id === fieldId);
+      openHeaderMenu({ fields: selectedFields, position: { x, y: height } });
+    },
+    [isTouchDevice, columns, visibleFields, openHeaderMenu]
+  );
+
+  const onContextMenu = useCallback(
+    (selection: CombinedSelection, position: IPosition) => {
+      const { isColumnSelection, ranges } = selection;
+
+      if (isColumnSelection) {
+        const [start, end] = ranges[0];
+        const startIdx = Math.min(start, end);
+        const endIdx = Math.max(start, end);
+        const selectColumns = Array.from({ length: endIdx - startIdx + 1 })
+          .map((_, index) => columns[startIdx + index])
+          .filter(Boolean);
+        const indexedColumns = new Set(selectColumns.map((c) => c.id));
+        const selectFields = visibleFields.filter((field) => indexedColumns.has(field.id));
+        const onSelectionClear = () => gridRef.current?.resetState();
+        openHeaderMenu({
+          position,
+          fields: selectFields,
+          onSelectionClear,
+        });
+      }
+    },
+    [columns, visibleFields, openHeaderMenu]
+  );
 
   return (
     <div ref={container} className="relative size-full overflow-hidden">
@@ -236,10 +373,13 @@ export const GridViewBase = () => {
             draggable={DraggableType.Column}
             isTouchDevice={isTouchDevice}
             rowCount={realRowCount}
-            rowHeight={GIRD_ROW_HEIGHT_DEFINITIONS[rowHeightLevel]}
+            rowHeight={rowHeight}
+            columnHeaderHeight={columnHeaderHeight}
             columnStatistics={columnStatistics}
-            freezeColumnCount={isTouchDevice ? 0 : 1}
+            freezeColumnCount={frozenColumnCount}
             columns={columns}
+            searchCursor={searchCursor}
+            searchHitIndex={searchHitIndex}
             customIcons={customIcons}
             rowControls={rowControls}
             style={{
@@ -256,9 +396,14 @@ export const GridViewBase = () => {
             onItemHovered={onItemHovered}
             onRowExpand={onRowExpandInner}
             onColumnResize={onColumnResize}
+            onColumnFreeze={onColumnFreeze}
             onColumnOrdered={onColumnOrdered}
             onColumnStatisticClick={onColumnStatisticClick}
             onCollapsedGroupChanged={onCollapsedGroupChanged}
+            onGroupHeaderContextMenu={onGroupHeaderContextMenu}
+            onColumnHeaderMenuClick={onColumnHeaderMenuClick}
+            onColumnHeaderClick={onColumnHeaderClick}
+            onContextMenu={onContextMenu}
           />
           <RowCounter rowCount={realRowCount} className="absolute bottom-3 left-0" />
         </>
@@ -271,9 +416,12 @@ export const GridViewBase = () => {
           </div>
         </div>
       )}
-      <StatisticMenu />
       <DomBox id={componentId} />
-      <ExpandRecordContainer ref={expandRecordRef} recordServerData={ssrRecord} />
+      <ExpandRecordContainer
+        ref={expandRecordRef}
+        recordServerData={ssrRecord}
+        buttonClickStatusHook={buttonClickStatusHook}
+      />
     </div>
   );
 };

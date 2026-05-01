@@ -13,7 +13,6 @@ import AddBoldIcon from '@teable/ui-lib/icons/app/add-bold.svg';
 import { Button } from '@teable/ui-lib/shadcn/ui/button';
 import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
-import { GUIDE_CREATE_TABLE } from '@/components/Guide';
 import { TableImport } from '../import-table';
 import { DraggableList } from './DraggableList';
 import { NoDraggableList } from './NoDraggableList';
@@ -37,14 +36,19 @@ export const TableList: React.FC = () => {
         <DropdownMenuTrigger asChild>
           <div className="px-3">
             {permission?.['table|create'] && (
-              <Button variant={'outline'} size={'xs'} className={`${GUIDE_CREATE_TABLE} w-full`}>
-                <AddBoldIcon />
+              <Button variant={'outline'} size={'icon-xs'} className="w-full">
+                <AddBoldIcon className="size-4 shrink-0" />
               </Button>
             )}
           </div>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64">
-          <DropdownMenuItem onClick={addTable} className="cursor-pointer">
+          <DropdownMenuItem
+            onClick={() => {
+              addTable();
+            }}
+            className="cursor-pointer"
+          >
             <Button variant="ghost" size="xs" className="h-4">
               <File className="size-4" />
               {t('table.operator.createBlank')}
@@ -80,7 +84,7 @@ export const TableList: React.FC = () => {
           fileType={fileType}
           open={dialogVisible}
           onOpenChange={(open) => setDialogVisible(open)}
-        ></TableImport>
+        />
       )}
 
       <div className="overflow-y-auto px-3">

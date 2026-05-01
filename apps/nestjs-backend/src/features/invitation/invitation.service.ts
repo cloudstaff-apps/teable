@@ -1,15 +1,15 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+/* eslint-disable sonarjs/no-duplicate-string */
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { IBaseRole, IRole } from '@teable/core';
-import { canManageRole, generateInvitationId } from '@teable/core';
+import { generateInvitationId, HttpErrorCode } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
 import {
   CollaboratorType,
+  MailTransporterType,
+  MailType,
+  PrincipalType,
   type AcceptInvitationLinkRo,
   type EmailInvitationVo,
   type EmailSpaceInvitationRo,
@@ -19,75 +19,31 @@ import dayjs from 'dayjs';
 import { pick } from 'lodash';
 import { ClsService } from 'nestjs-cls';
 import type { IMailConfig } from '../../configs/mail.config';
+import { CustomHttpException } from '../../custom.exception';
+import { Events } from '../../event-emitter/events';
 import type { IClsStore } from '../../types/cls';
 import { generateInvitationCode } from '../../utils/code-generate';
 import { CollaboratorService } from '../collaborator/collaborator.service';
 import { MailSenderService } from '../mail-sender/mail-sender.service';
+import { SettingOpenApiService } from '../setting/open-api/setting-open-api.service';
 import { UserService } from '../user/user.service';
 
 @Injectable()
 export class InvitationService {
   constructor(
     private readonly prismaService: PrismaService,
+    private readonly settingOpenApiService: SettingOpenApiService,
     private readonly cls: ClsService<IClsStore>,
     private readonly configService: ConfigService,
     private readonly mailSenderService: MailSenderService,
     private readonly collaboratorService: CollaboratorService,
-    private readonly userService: UserService
+    private readonly userService: UserService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   private generateInviteUrl(invitationId: string, invitationCode: string) {
     const mailConfig = this.configService.get<IMailConfig>('mail');
     return `${mailConfig?.origin}/invite?invitationId=${invitationId}&invitationCode=${invitationCode}`;
-  }
-
-  private async validateUserInviteRole({
-    userId,
-    inviteRole,
-    resourceId,
-    resourceType,
-  }: {
-    userId: string;
-    inviteRole: IRole;
-    resourceId: string;
-    resourceType: CollaboratorType;
-  }) {
-    let spaceId = resourceType === CollaboratorType.Space ? resourceId : '';
-    if (resourceType === CollaboratorType.Base) {
-      const base = await this.prismaService
-        .txClient()
-        .base.findFirstOrThrow({
-          where: {
-            id: resourceId,
-            deletedTime: null,
-          },
-        })
-        .catch(() => {
-          throw new BadRequestException('Base not found');
-        });
-      spaceId = base.spaceId;
-    }
-    const coll = await this.prismaService
-      .txClient()
-      .collaborator.findFirstOrThrow({
-        where: {
-          userId,
-          resourceId: {
-            in: [spaceId, resourceId],
-          },
-        },
-      })
-      .catch(() => {
-        throw new BadRequestException('User not found in collaborator');
-      });
-    const userRole = coll.roleName as IRole;
-
-    if (userRole === inviteRole) {
-      return;
-    }
-    if (!canManageRole(userRole, inviteRole)) {
-      throw new ForbiddenException(`You do not have permission to invite this role: ${inviteRole}`);
-    }
   }
 
   private async createNotExistedUser(emails: string[]) {
@@ -103,15 +59,17 @@ export class InvitationService {
     const user = this.cls.get('user');
 
     if (!user?.isAdmin) {
-      const setting = await this.prismaService.setting.findFirst({
-        select: {
-          disallowSpaceInvitation: true,
-        },
-      });
+      const setting = await this.settingOpenApiService.getSetting();
 
       if (setting?.disallowSpaceInvitation) {
-        throw new ForbiddenException(
-          'The current instance disallow space invitation by the administrator'
+        throw new CustomHttpException(
+          'The current instance disallow space invitation by the administrator',
+          HttpErrorCode.RESTRICTED_RESOURCE,
+          {
+            localization: {
+              i18nKey: 'httpErrors.invitation.disallowSpaceInvitation',
+            },
+          }
         );
       }
     }
@@ -130,10 +88,15 @@ export class InvitationService {
     resourceName: string;
     resourceType: CollaboratorType;
   }) {
-    const user = this.cls.get('user');
-    await this.validateUserInviteRole({
+    const user = { ...this.cls.get('user') };
+
+    await this.checkInvitationLimits();
+
+    const departmentIds = this.cls.get('organization.departments')?.map((d) => d.id);
+    await this.collaboratorService.validateUserAddRole({
+      departmentIds,
       userId: user.id,
-      inviteRole: role,
+      addRole: role,
       resourceId,
       resourceType,
     });
@@ -156,13 +119,27 @@ export class InvitationService {
       for (const sendUser of sendUsers) {
         // create collaborator link
         if (resourceType === CollaboratorType.Space) {
-          await this.collaboratorService.createSpaceCollaborator(sendUser.id, resourceId, role);
+          await this.collaboratorService.createSpaceCollaborator({
+            collaborators: [
+              {
+                principalId: sendUser.id,
+                principalType: PrincipalType.User,
+              },
+            ],
+            spaceId: resourceId,
+            role: role as IRole,
+          });
         } else {
-          await this.collaboratorService.createBaseCollaborator(
-            sendUser.id,
-            resourceId,
-            role as IBaseRole
-          );
+          await this.collaboratorService.createBaseCollaborator({
+            collaborators: [
+              {
+                principalId: sendUser.id,
+                principalType: PrincipalType.User,
+              },
+            ],
+            baseId: resourceId,
+            role: role as IBaseRole,
+          });
         }
         // generate invitation record
         const { id, invitationCode } = await this.generateInvitation({
@@ -183,20 +160,34 @@ export class InvitationService {
             invitationId: id,
           },
         });
+
         // get email info
-        const inviteEmailOptions = this.mailSenderService.inviteEmailOptions({
+        const inviteEmailOptions = await this.mailSenderService.inviteEmailOptions({
           name: user.name,
           email: user.email,
           resourceName,
           resourceType,
           inviteUrl: this.generateInviteUrl(id, invitationCode),
         });
-        this.mailSenderService.sendMail({
-          to: sendUser.email,
-          ...inviteEmailOptions,
-        });
+        this.mailSenderService.sendMail(
+          {
+            to: sendUser.email,
+            ...inviteEmailOptions,
+          },
+          {
+            type: MailType.Invite,
+            transporterName: MailTransporterType.Notify,
+          }
+        );
         result[sendUser.email] = { invitationId: id };
       }
+
+      this.eventEmitter.emit(Events.INVITATION_EMAIL_SEND, {
+        resourceId,
+        resourceType,
+        emailCount: emails.length,
+      });
+
       return result;
     });
   }
@@ -209,7 +200,11 @@ export class InvitationService {
       where: { id: spaceId, deletedTime: null },
     });
     if (!space) {
-      throw new BadRequestException('Space not found');
+      throw new CustomHttpException('Space not found', HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.space.notFound',
+        },
+      });
     }
 
     return this.emailInvitation({
@@ -229,7 +224,11 @@ export class InvitationService {
       where: { id: baseId, deletedTime: null },
     });
     if (!base) {
-      throw new BadRequestException('Base not found');
+      throw new CustomHttpException('Base not found', HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.base.notFound',
+        },
+      });
     }
 
     return this.emailInvitation({
@@ -250,9 +249,11 @@ export class InvitationService {
     resourceId: string;
     resourceType: CollaboratorType;
   }): Promise<ItemSpaceInvitationLinkVo> {
-    await this.validateUserInviteRole({
+    const departmentIds = this.cls.get('organization.departments')?.map((d) => d.id);
+    await this.collaboratorService.validateUserAddRole({
+      departmentIds,
       userId: this.cls.get('user.id'),
-      inviteRole: role,
+      addRole: role,
       resourceId,
       resourceType,
     });
@@ -262,6 +263,12 @@ export class InvitationService {
       resourceType,
       type: 'link',
     });
+
+    this.eventEmitter.emit(Events.INVITATION_LINK_CREATE, {
+      resourceId,
+      resourceType,
+    });
+
     return {
       invitationId: id,
       role: role as IRole,
@@ -330,9 +337,11 @@ export class InvitationService {
     resourceId: string;
     resourceType: CollaboratorType;
   }) {
-    await this.validateUserInviteRole({
+    const departmentIds = this.cls.get('organization.departments')?.map((d) => d.id);
+    await this.collaboratorService.validateUserAddRole({
+      departmentIds,
       userId: this.cls.get('user.id'),
-      inviteRole: role,
+      addRole: role,
       resourceId,
       resourceType,
     });
@@ -375,7 +384,11 @@ export class InvitationService {
     const currentUserId = this.cls.get('user.id');
     const { invitationCode, invitationId } = acceptInvitationLinkRo;
     if (generateInvitationCode(invitationId) !== invitationCode) {
-      throw new BadRequestException('invalid code');
+      throw new CustomHttpException('Invalid invitation code', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.invitation.invalidCode',
+        },
+      });
     }
     const linkInvitation = await this.prismaService.invitation.findFirst({
       where: {
@@ -384,13 +397,21 @@ export class InvitationService {
       },
     });
     if (!linkInvitation) {
-      throw new NotFoundException(`link ${invitationId} not found`);
+      throw new CustomHttpException('Invitation link not found', HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.invitation.linkNotFound',
+        },
+      });
     }
 
     const { expiredTime, baseId, spaceId, role, createdBy, type } = linkInvitation;
 
     if (expiredTime && expiredTime < new Date()) {
-      throw new ForbiddenException('link has expired');
+      throw new CustomHttpException('Invitation link has expired', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.invitation.linkExpired',
+        },
+      });
     }
 
     if (type === 'email') {
@@ -399,29 +420,67 @@ export class InvitationService {
 
     const resourceId = spaceId || baseId;
     if (!resourceId) {
-      throw new BadRequestException('Invalid link: resourceId not found');
+      throw new CustomHttpException(
+        'Invalid invitation link: resourceId not found',
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: !spaceId ? 'httpErrors.space.notFound' : 'httpErrors.base.notFound',
+          },
+        }
+      );
     }
 
     const resourceType = spaceId ? CollaboratorType.Space : CollaboratorType.Base;
+    let baseSpaceId: string | null = null;
+    if (baseId) {
+      const base = await this.prismaService
+        .txClient()
+        .base.findUniqueOrThrow({
+          where: { id: baseId, deletedTime: null },
+        })
+        .catch(() => {
+          throw new CustomHttpException('Base not found', HttpErrorCode.NOT_FOUND, {
+            localization: {
+              i18nKey: 'httpErrors.base.notFound',
+            },
+          });
+        });
+      baseSpaceId = base.spaceId;
+    }
     const exist = await this.prismaService.txClient().collaborator.count({
-      where: { userId: currentUserId, resourceId, resourceType },
+      where: {
+        principalId: currentUserId,
+        principalType: PrincipalType.User,
+        resourceId: { in: baseSpaceId ? [baseSpaceId, baseId!] : [spaceId!] },
+      },
     });
     if (!exist) {
       await this.prismaService.$tx(async () => {
         if (resourceType === CollaboratorType.Space) {
-          await this.collaboratorService.createSpaceCollaborator(
-            currentUserId,
-            spaceId!,
-            role as IRole,
-            createdBy
-          );
+          await this.collaboratorService.createSpaceCollaborator({
+            collaborators: [
+              {
+                principalId: currentUserId,
+                principalType: PrincipalType.User,
+              },
+            ],
+            spaceId: spaceId!,
+            role: role as IRole,
+            createdBy,
+          });
         } else {
-          await this.collaboratorService.createBaseCollaborator(
-            currentUserId,
-            baseId!,
-            role as IBaseRole,
-            createdBy
-          );
+          await this.collaboratorService.createBaseCollaborator({
+            collaborators: [
+              {
+                principalId: currentUserId,
+                principalType: PrincipalType.User,
+              },
+            ],
+            baseId: baseId!,
+            role: role as IBaseRole,
+            createdBy,
+          });
         }
         // save invitation record for audit
         await this.prismaService.txClient().invitationRecord.create({
@@ -436,6 +495,45 @@ export class InvitationService {
         });
       });
     }
+    this.eventEmitter.emit(Events.INVITATION_ACCEPT, {
+      resourceId: spaceId || baseId,
+      resourceType: spaceId ? CollaboratorType.Space : CollaboratorType.Base,
+      accepterId: currentUserId,
+      inviterId: createdBy,
+    });
+
     return { baseId, spaceId };
+  }
+
+  private async checkInvitationLimits(): Promise<void> {
+    if (!process.env.MAX_INVITATIONS_PER_HOUR) return;
+
+    const user = this.cls.get('user');
+    const maxInvitationsPerHour = Number(process.env.MAX_INVITATIONS_PER_HOUR);
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentInvitations = await this.prismaService.invitationRecord.count({
+      where: {
+        inviter: user.id,
+        createdTime: { gte: oneHourAgo.toISOString() },
+      },
+    });
+
+    if (Number(recentInvitations) >= maxInvitationsPerHour) {
+      await this.prismaService.user.update({
+        where: { id: user.id },
+        data: {
+          deactivatedTime: new Date().toISOString(),
+        },
+      });
+      throw new CustomHttpException(
+        'You have reached the maximum number of invitations per hour',
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.invitation.limitExceeded',
+          },
+        }
+      );
+    }
   }
 }

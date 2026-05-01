@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
-import { HelpCircle, TeableNew } from '@teable/icons';
+import { HelpCircle } from '@teable/icons';
 import { decisionInfoGet } from '@teable/openapi';
 import { useSession } from '@teable/sdk/hooks';
 import { Spin } from '@teable/ui-lib/base';
 import { Button, Card, Separator, cn } from '@teable/ui-lib/shadcn';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { useMemo } from 'react';
+import { TeableLogo } from '@/components/TeableLogo';
 import { OAuthScope } from '@/features/app/components/oauth/OAuthScope';
 import { UserAvatar } from '@/features/app/components/user/UserAvatar';
 import { usePreviewUrl } from '@/features/app/hooks/usePreviewUrl';
@@ -59,17 +59,13 @@ export const OAuthAppDecisionPage = () => {
       })}
     >
       <Card className="mx-auto my-8 min-w-72 max-w-xl space-y-4">
-        <TeableNew className="ml-8 mt-3 size-8 text-black" />
+        <TeableLogo className="ml-8 mt-3 size-8" />
         <div className="relative mx-auto size-28 overflow-hidden">
           {decisionInfo.logo ? (
-            <Image
+            <img
               src={getPreviewUrl(decisionInfo.logo)}
               alt="card cover"
-              fill
-              sizes="100%"
-              style={{
-                objectFit: 'contain',
-              }}
+              className="absolute inset-0 size-full object-contain"
             />
           ) : (
             <HelpCircle className="size-28" />

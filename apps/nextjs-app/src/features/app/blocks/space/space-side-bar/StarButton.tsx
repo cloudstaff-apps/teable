@@ -28,14 +28,14 @@ export const StarButton = (props: IStarButtonProps) => {
 
   const isPin = pinMap?.[id];
 
-  const { mutate: addPinMutation, isLoading: addPinLoading } = useMutation({
+  const { mutate: addPinMutation, isPending: addPinLoading } = useMutation({
     mutationFn: addPin,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ReactQueryKeys.pinList() });
     },
   });
 
-  const { mutate: deletePinMutation, isLoading: deletePinLoading } = useMutation({
+  const { mutate: deletePinMutation, isPending: deletePinLoading } = useMutation({
     mutationFn: deletePin,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ReactQueryKeys.pinList() });
@@ -45,22 +45,23 @@ export const StarButton = (props: IStarButtonProps) => {
   return (
     <TooltipProvider>
       <Tooltip>
-        <TooltipTrigger>
+        <TooltipTrigger
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (addPinLoading || deletePinLoading) return;
+            isPin ? deletePinMutation({ id, type }) : addPinMutation({ id, type });
+          }}
+        >
           <Star
             className={cn(
-              'size-3 shrink-0 opacity-0 group-hover:opacity-100',
+              'size-4 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-colors',
               {
                 'opacity-100': isPin,
                 'fill-yellow-400 text-yellow-400': isPin,
               },
               className
             )}
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              if (addPinLoading || deletePinLoading) return;
-              isPin ? deletePinMutation({ id, type }) : addPinMutation({ id, type });
-            }}
           />
         </TooltipTrigger>
         <TooltipContent>

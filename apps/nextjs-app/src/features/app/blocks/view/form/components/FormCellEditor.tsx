@@ -44,7 +44,8 @@ export const FormCellEditor = (props: IFormCellEditor) => {
         attachmentManager.shareId = shareId as string;
         return (
           <UploadAttachment
-            className={cn('h-64', className)}
+            mode="local"
+            className={cn('max-h-64', className)}
             attachments={(cellValue ?? []) as IAttachmentCellValue}
             onChange={onChange}
             attachmentManager={attachmentManager}

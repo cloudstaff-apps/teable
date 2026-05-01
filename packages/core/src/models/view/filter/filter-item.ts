@@ -18,6 +18,7 @@ import {
   pastNumberOfDays,
   subOperators,
   symbols,
+  isNotExactly,
 } from './operator';
 
 // eslint-disable-next-line @typescript-eslint/naming-convention
@@ -33,21 +34,32 @@ export const dateFilterSchema = z
     mode: subOperators,
     numberOfDays: z.coerce.number().int().nonnegative().optional(),
     exactDate: dataFieldCellValueSchema.optional(),
+    exactDateEnd: dataFieldCellValueSchema.optional(),
     timeZone: timeZoneStringSchema,
   })
   .superRefine((val, ctx) => {
-    if (val.mode === 'exactDate' && !val.exactDate) {
+    if (['exactDate', 'exactFormatDate'].includes(val.mode) && !val.exactDate) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `When the mode is set to '${val.mode}', an 'exactDate' must be provided`,
+        message: `When the mode is set to '${val.mode}', an '${val.mode}' must be provided`,
       });
-    } else if (
-      modesRequiringDays.includes(val.mode) &&
-      (val.numberOfDays === null || val.numberOfDays === undefined)
-    ) {
+    } else if (val.mode === 'dateRange') {
+      if (!val.exactDate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `When the mode is 'dateRange', a start date 'exactDate' must be provided`,
+        });
+      }
+      if (!val.exactDateEnd) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `When the mode is 'dateRange', an end date 'exactDateEnd' must be provided`,
+        });
+      }
+    } else if (modesRequiringDays.includes(val.mode) && val.numberOfDays == null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `When the mode is '${val.mode}', a numerical value for 'numberOfDays' must be provided`,
+        message: `When the mode is '${val.mode}', a numerical value for '${val.mode}' must be provided`,
       });
     }
   });
@@ -58,10 +70,27 @@ export type ILiteralValue = z.infer<typeof literalValueSchema>;
 export const literalValueListSchema = literalValueSchema.array().nonempty();
 export type ILiteralValueList = z.infer<typeof literalValueListSchema>;
 
+export const fieldReferenceValueSchema = z.object({
+  type: z.literal('field'),
+  fieldId: z.string(),
+  tableId: z.string().optional(),
+});
+export type IFieldReferenceValue = z.infer<typeof fieldReferenceValueSchema>;
+
 export const filterValueSchema = z
-  .union([literalValueSchema, literalValueListSchema, dateFilterSchema])
+  .union([literalValueSchema, literalValueListSchema, dateFilterSchema, fieldReferenceValueSchema])
   .nullable();
 export type IFilterValue = z.infer<typeof filterValueSchema>;
+
+export const isFieldReferenceValue = (value: unknown): value is IFieldReferenceValue => {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    (value as { type?: string }).type === 'field' &&
+    typeof (value as { fieldId?: unknown }).fieldId === 'string'
+  );
+};
 
 export type IFilterOperator = IOperator;
 export type IFilterSymbolOperator = ISymbol;
@@ -72,16 +101,35 @@ const operatorsExpectingArray: string[] = [
   isNoneOf.value,
   hasAnyOf.value,
   hasAllOf.value,
+  isNotExactly.value,
   hasNoneOf.value,
   isExactly.value,
 ];
 
-export const baseFilterOperatorSchema = z.object({
-  isSymbol: z.literal(false).optional(),
-  fieldId: z.string(),
-  value: filterValueSchema,
-  operator: operators,
-});
+const normalizeUnaryOperatorValue = (input: unknown): unknown => {
+  if (input == null || typeof input !== 'object') return input;
+
+  const value = input as Record<string, unknown>;
+  if (typeof value.operator !== 'string' || !operatorsExpectingNull.includes(value.operator)) {
+    return input;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'value')) return input;
+
+  return {
+    ...value,
+    value: null,
+  };
+};
+
+export const baseFilterOperatorSchema = z.preprocess(
+  normalizeUnaryOperatorValue,
+  z.object({
+    isSymbol: z.literal(false).optional(),
+    fieldId: z.string(),
+    value: filterValueSchema,
+    operator: operators,
+  })
+);
 
 const filterOperatorRefineBase = z.object({
   value: filterValueSchema,
@@ -104,14 +152,22 @@ export const refineExtendedFilterOperatorSchema = <
       });
     }
 
-    if (operatorsExpectingArray.includes(val.operator) && !Array.isArray(val.value)) {
+    if (
+      operatorsExpectingArray.includes(val.operator) &&
+      !Array.isArray(val.value) &&
+      !isFieldReferenceValue(val.value)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `For the operator '${val.operator}', the 'value' should be an array`,
       });
     }
 
-    if (!operatorsExpectingArray.includes(val.operator) && Array.isArray(val.value)) {
+    if (
+      !operatorsExpectingArray.includes(val.operator) &&
+      Array.isArray(val.value) &&
+      !isFieldReferenceValue(val.value)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `For the operator '${val.operator}', the 'value' should not be an array`,

@@ -10,8 +10,8 @@ import {
   Switch,
   cn,
 } from '@teable/ui-lib/shadcn';
+import { useTranslation } from 'next-i18next';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import { tableConfig } from '@/features/i18n/table.config';
 
 interface ICoverFieldSelect {
@@ -35,18 +35,20 @@ export const CoverFieldSelect = (props: ICoverFieldSelect) => {
   );
 
   return (
-    <div className={cn('w-full p-2', className)}>
-      <div className="mb-2 flex items-center justify-between">
+    <div className={cn('w-full flex flex-col gap-2 px-4 py-3', className)}>
+      <div className="flex items-center justify-between">
         <span className="text-sm">{t('table:kanban.toolbar.imageSetting')}</span>
         {fieldId && (
           <div className="flex items-center gap-2">
-            <Label htmlFor="attachment-field-select" className="text-xs font-normal text-slate-400">
+            <Label
+              htmlFor="attachment-field-select"
+              className="text-xs font-normal text-muted-foreground"
+            >
               {t('table:kanban.toolbar.fit')}
             </Label>
             <Switch
               id="attachment-field-select"
-              className="h-4 w-7"
-              classNameThumb="size-3 data-[state=checked]:translate-x-3"
+              size={'sm'}
               checked={isCoverFit}
               onCheckedChange={(checked) => onCheckedChange?.(checked)}
             />
@@ -57,7 +59,7 @@ export const CoverFieldSelect = (props: ICoverFieldSelect) => {
         value={fieldId ?? undefined}
         onValueChange={(value) => onSelectChange?.(value === COVER_FIELD_EMPTY_ID ? null : value)}
       >
-        <SelectTrigger className="h-8 w-full bg-background">
+        <SelectTrigger className="bg-background">
           <SelectValue placeholder={t('table:kanban.toolbar.chooseAttachmentField')} />
         </SelectTrigger>
         <SelectContent className=" w-72">

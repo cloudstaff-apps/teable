@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { isMeTag, Me } from '@teable/core';
 import { User as UserIcon } from '@teable/icons';
-import { getBaseCollaboratorList } from '@teable/openapi';
+import { getRecordGetCollaborators, getUserCollaborators } from '@teable/openapi';
 import { cn } from '@teable/ui-lib';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ReactQueryKeys } from '../../../../config/react-query-keys';
 import { useTranslation } from '../../../../context/app/i18n';
+import { useIsReadOnlyPreview } from '../../../../hooks';
 import { useBaseId } from '../../../../hooks/use-base-id';
 import { useSession } from '../../../../hooks/use-session';
 import type { UserField, CreatedByField, LastModifiedByField } from '../../../../model';
@@ -17,7 +18,10 @@ interface IFilterUserProps {
   field: UserField | CreatedByField | LastModifiedByField;
   operator: string;
   value: string[] | string | null;
+  onSearch?: (value: string) => void;
   onSelect: (value: string[] | string | null) => void;
+  modal?: boolean;
+  className?: string;
 }
 
 interface IFilterUserBaseProps extends IFilterUserProps {
@@ -32,7 +36,7 @@ interface IFilterUserBaseProps extends IFilterUserProps {
 const SINGLE_SELECT_OPERATORS = ['is', 'isNot'];
 
 const FilterUserSelectBase = (props: IFilterUserBaseProps) => {
-  const { value, onSelect, operator, data, disableMe } = props;
+  const { value, onSelect, operator, data, disableMe, onSearch, modal, className } = props;
   const { user: currentUser } = useSession();
   const { t } = useTranslation();
   const values = useMemo<string | string[] | null>(() => value, [value]);
@@ -74,8 +78,8 @@ const FilterUserSelectBase = (props: IFilterUserBaseProps) => {
             <UserTag
               avatar={
                 isMeTag(option.value) ? (
-                  <span className="flex shrink-0 items-center truncate rounded-full">
-                    <UserIcon className="z-50 size-6 rounded-full border bg-secondary p-1" />
+                  <span className="flex size-5 shrink-0 items-center truncate rounded-full">
+                    <UserIcon className="z-50 size-5 rounded-full border bg-secondary p-[3px]" />
                   </span>
                 ) : (
                   option.avatar
@@ -116,35 +120,76 @@ const FilterUserSelectBase = (props: IFilterUserBaseProps) => {
       {!isMultiple ? (
         <BaseSingleSelect
           options={options}
+          modal={modal}
           onSelect={onSelect}
           value={values as string}
           displayRender={displayRender}
           optionRender={optionRender}
-          className="flex w-64 overflow-hidden"
-          popoverClassName="w-64"
+          className={cn('flex h-8 overflow-hidden px-2', className ? className : 'w-40')}
+          popoverClassName="w-40"
+          placeholderClassName="text-xs"
+          onSearch={onSearch}
         />
       ) : (
         <BaseMultipleSelect
           options={options}
+          modal={modal}
           onSelect={onSelect}
           value={values as string[]}
           displayRender={displayRender}
           optionRender={optionRender}
-          className="w-64"
-          popoverClassName="w-64"
+          className={cn('h-8 px-2', className ? className : 'w-40')}
+          popoverClassName="w-40"
+          placeholderClassName="text-xs"
+          onSearch={onSearch}
         />
       )}
     </>
   );
 };
 
+const defaultData = {
+  users: [],
+};
+
 const FilterUserSelect = (props: IFilterUserProps) => {
+  const { field } = props;
   const baseId = useBaseId();
-  const { data: collaboratorsData } = useQuery({
-    queryKey: ReactQueryKeys.baseCollaboratorList(baseId as string),
-    queryFn: ({ queryKey }) => getBaseCollaboratorList(queryKey[1]).then((res) => res.data),
+  const [search, setSearch] = useState('');
+  const isReadOnlyPreview = useIsReadOnlyPreview();
+  const { data: collaboratorsData = defaultData } = useQuery({
+    queryKey: ReactQueryKeys.baseCollaboratorListUser(baseId as string, {
+      includeSystem: true,
+      skip: 0,
+      take: 100,
+      search,
+    }),
+    queryFn: ({ queryKey }) =>
+      getUserCollaborators(queryKey[1], queryKey[2]).then((res) => res.data),
+    enabled: !isReadOnlyPreview,
   });
-  return collaboratorsData && <FilterUserSelectBase {...props} data={collaboratorsData} />;
+
+  const { data: recordCollaboratorsData } = useQuery({
+    queryKey: ReactQueryKeys.recordCollaboratorList(field.tableId, {
+      fieldId: field.id,
+      skip: 0,
+      take: 150,
+      search,
+    }),
+    queryFn: ({ queryKey }) =>
+      getRecordGetCollaborators(queryKey[1], queryKey[2]).then((res) => res.data),
+    enabled: isReadOnlyPreview,
+  });
+
+  const data = isReadOnlyPreview
+    ? recordCollaboratorsData
+    : collaboratorsData?.users?.map((item) => ({
+        userId: item.id,
+        userName: item.name,
+        avatar: item.avatar,
+      }));
+
+  return <FilterUserSelectBase {...props} data={data} onSearch={setSearch} />;
 };
 
 export { FilterUserSelect, FilterUserSelectBase };

@@ -11,14 +11,18 @@ export const temporaryPasteRoSchema = rangesRoSchema
   .pick({
     viewId: true,
     ranges: true,
-    excludeFieldIds: true,
+    projection: true,
+    ignoreViewQuery: true,
   })
   .extend({
-    content: z.string().openapi({
-      description: 'Content to paste',
-      example: 'John\tDoe\tjohn.doe@example.com',
-    }),
-    header: z.array(fieldVoSchema).optional().openapi({
+    content: z
+      .string()
+      .or(z.array(z.array(z.unknown())))
+      .meta({
+        description: 'Content to paste',
+        example: 'John\tDoe\tjohn.doe@example.com',
+      }),
+    header: z.array(fieldVoSchema).optional().meta({
       description: 'Table header for paste operation',
       example: [],
     }),
@@ -37,7 +41,8 @@ export type ITemporaryPasteVo = z.infer<typeof temporaryPasteVoSchema>;
 export const temporaryPasteRoute: RouteConfig = registerRoute({
   method: 'patch',
   path: TEMPORARY_PASTE_URL,
-  description: 'Paste operation for pre-filled table rows',
+  summary: 'Preview paste operation results',
+  description: 'Preview the results of a paste operation without applying changes to the table',
   request: {
     params: z.object({
       tableId: z.string(),

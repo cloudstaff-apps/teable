@@ -1,0 +1,204 @@
+{
+  "initialSpaceName": "{{name}}'s space",
+  "action": {
+    "createBase": "Создать базу",
+    "createSpace": "Создать пространство",
+    "invite": "Пригласить"
+  },
+  "allSpaces": "Все пространства",
+  "emptySpaceTitle": "В этом пространстве нет баз",
+  "spaceIsEmpty": "Создайте свою первую базу, чтобы начать",
+  "baseModal": {
+    "copy": "Копировать",
+    "duplicate": "Дублировать \"{{baseName}}\"",
+    "createBaseFromTemplate": "Создать базу из шаблона",
+    "duplicateRecords": "Дублировать записи",
+    "duplicateRecordsTip": "История изменений и сотрудники не будут дублироваться.",
+    "toSpace": "В пространство",
+    "copyToSpace": "Скопировать в пространство",
+    "duplicateBase": "Дублировать базу",
+    "missTargetTip": "Пожалуйста, выберите пространство для дублирования базы.",
+    "copying": "Идет дублирование базы, это может занять некоторое время...",
+    "copyingTemplate": "Создание базы из шаблона, это может занять некоторое время...",
+    "howToCreate": "С чего вы хотите начать?",
+    "fromScratch": "С нуля",
+    "fromTemplate": "Из шаблона",
+    "moveBaseToAnotherSpace": "Переместить {{baseName}} в другое пространство",
+    "chooseSpace": "Выберите пространство"
+  },
+  "spaceSetting": {
+    "title": "Настройки пространства",
+    "general": "Общие",
+    "collaborators": "Сотрудники",
+    "generalDescription": "Измените настройки текущего пространства здесь",
+    "collaboratorDescription": "Управляйте сотрудниками вашего пространства и устанавливайте их права доступа",
+    "spaceName": "Название пространства",
+    "spaceId": "ID пространства"
+  },
+  "pin": {
+    "add": "Добавить в закрепленные",
+    "remove": "Удалить из закрепленных",
+    "pin": "Закрепить",
+    "empty": "Ваши закрепленные базы и пространства появятся здесь"
+  },
+  "tooltip": {
+    "noPermissionToCreateBase": "У вас нет разрешения на создание базы"
+  },
+  "tip": {
+    "delete": "Вы уверены, что хотите удалить <0/>?",
+    "title": "Советы",
+    "exportTips1": "Экспорт текущей базы в виде файла .tea, что может занять некоторое время. Вы можете проверить результаты экспорта в центре уведомлений.",
+    "exportTips2": "Вы можете импортировать файл .tea в пространство -> больше -> импорт",
+    "exportTips3": "Поля связи между базами будут преобразованы в однострочный текст.",
+    "exportIncludeDataLabel": "Включить записи",
+    "exportIncludeDataDescription": "При отключении экспортируется только структура и конфигурация",
+    "exportTitle": "Экспорт",
+    "exportDescription": "Экспортировать текущую базу данных в файл .tea, это может занять некоторое время.",
+    "exportStartButton": "Начать экспорт",
+    "exportSlowTip": "Объём данных большой. Экспорт может занять некоторое время. Вы можете временно покинуть страницу.",
+    "exportReadyDescription": "Пожалуйста, скачайте файл .tea, {{importHint}}",
+    "moveBaseSuccessTitle": "Перемещение успешно",
+    "moveBaseSuccessDescription": "{{baseName}} успешно перемещена в {{spaceName}}"
+  },
+  "deleteSpaceModal": {
+    "title": "Удалить пространство",
+    "blockedTitle": "Невозможно удалить это пространство",
+    "blockedDesc": "У этого пространства есть активная подписка. Пожалуйста, отмените подписку перед удалением пространства.",
+    "permanentDeleteWarning": "Это действие навсегда удалит все ресурсы и данные в текущем пространстве. Пожалуйста, действуйте осторожно!",
+    "confirmInputLabel": "Пожалуйста, введите DELETE для подтверждения удаления"
+  },
+  "sharedBase": {
+    "title": "Общие базы",
+    "description": "Все базы, в которые меня пригласили",
+    "empty": "Общих баз пока нет"
+  },
+  "integration": {
+    "title": "Интеграции",
+    "description": "Управление интеграциями вашего пространства",
+    "addIntegration": "Добавить интеграцию",
+    "ai": "ИИ"
+  },
+  "aiSetting": {
+    "title": "Настройки ИИ",
+    "description": "Управление настройками ИИ вашего пространства",
+    "enableTips": "Включите ИИ, чтобы использовать функции ИИ в вашем пространстве вместо системного ИИ",
+    "enable": "Инициализировать настройки ИИ",
+    "enableSwitchTips": "Пожалуйста, настройте большую модель кодирования перед включением"
+  },
+  "import": {
+    "importing": "Импорт",
+    "importWayTip": "Нажмите или перетащите файл в эту область для загрузки",
+    "baseImportTips": "Нажмите или перетащите файл .tea в эту область для загрузки",
+    "confirm": "Подтвердить и продолжить",
+
+    "phase": {
+      "parsingStructure": "Parsing structure",
+      "creatingBase": "Creating base: {{detail}}",
+      "creatingTable": "Creating table: {{detail}}",
+      "creatingCommonFields": "Creating basic fields for {{table}}: {{fields}}",
+      "creatingButtonFields": "Creating button fields for {{table}}: {{fields}}",
+      "creatingFormulaFields": "Creating formula fields for {{table}}: {{fields}}",
+      "creatingLinkFields": "Creating link fields for {{table}}: {{fields}}",
+      "creatingLookupFields": "Creating lookup fields for {{table}}: {{fields}}",
+      "creatingTableViews": "Creating views for {{table}}: {{fields}}",
+      "creatingPlugins": "Creating plugins",
+      "creatingFolders": "Creating folders",
+      "creatingWorkflows": "Creating workflows",
+      "creatingApps": "Creating apps",
+      "creatingAuthorityMatrix": "Creating authority matrix",
+      "queuingAttachments": "Queuing attachment uploads",
+      "uploadingAppFiles": "Uploading app files",
+      "queuingDataImport": "Queuing data import",
+      "done": "Import completed",
+      "clickToView": "Нажмите для просмотра"
+    }
+  },
+  "template": {
+    "title": "Шаблон",
+    "description": "Быстро создать новую базу из шаблона",
+    "noTemplatesAvailable": "Нет доступных шаблонов",
+    "noTemplatesDescription": "Здесь пока ничего нет"
+  },
+  "recentlyBase": {
+    "title": "Недавно просмотренные"
+  },
+  "noBases": {
+    "title": "Привет, {{userName}}!",
+    "description": "Давайте начнем управлять вашей работой с вашей первой базой."
+  },
+  "noSpaces": {
+    "title": "Привет, {{userName}}!",
+    "description": "Создайте свое первое пространство, чтобы начать путь совместной работы с данными."
+  },
+  "baseList": {
+    "allBases": "Все базы",
+    "owner": "Владелец",
+    "createdTime": "Создано",
+    "lastOpened": "Последнее открытие",
+    "enter": "Войти",
+    "noTables": "Нет таблиц",
+    "empty": "Баз пока нет"
+  },
+  "publishBase": {
+    "title": "Опубликовать в центре шаблонов",
+    "description": "Публикация базы в центре шаблонов в один клик! Пусть больше людей увидят, используют и ремикшируют ваше творчество, создавая более мощный бизнес вместе",
+    "infoTitle": "Основная информация",
+    "form": {
+      "title": "Название",
+      "description": "Описание",
+      "security": "Безопасность",
+      "includeNodes": "Включить узлы",
+      "advanced": "Дополнительно",
+      "publishNode": "Опубликовать узлы",
+      "includeData": "Включить данные",
+      "defaultActiveNode": "Активный узел по умолчанию",
+      "select": "пожалуйста, выберите",
+      "descriptionPlaceholder": "Кратко опишите свою идею...",
+      "titlePlaceholder": "Назовите свою работу..."
+    },
+    "publishToCommunity": "Опубликовать в центре шаблонов",
+    "publish": "Опубликовать",
+    "publishSuccess": "Успешно опубликовано!",
+    "previewTips": "Покажите свою работу миру",
+    "update": "Обновить",
+    "unPublish": "Снять с публикации",
+    "unPublishSuccess": "База успешно снята с публикации!",
+    "unPublishConfirmTitle": "Подтвердите снятие с публикации",
+    "unPublishConfirmDescription": "Вы уверены, что хотите снять эту базу с публикации? Она больше не будет видна в центре шаблонов.",
+    "usageCount": "Количество использований: ",
+    "uploadCover": "Нажмите, чтобы загрузить обложку",
+    "changeCover": "Нажмите, чтобы изменить обложку",
+    "uploading": "Загрузка изображения...",
+    "uploadSuccess": "Изображение успешно загружено",
+    "uploadFailed": "Ошибка загрузки",
+    "invalidImageType": "Пожалуйста, выберите файл изображения",
+    "tips": {
+      "publishValidation": "название и описание обязательны",
+      "atLeastOneNode": "Выберите хотя бы один узел для публикации"
+    },
+    "urlCopied": "URL скопирован в буфер обмена!",
+    "urlCopiedForDiscord": "URL скопирован в буфер обмена! Вы можете вставить его в Discord.",
+    "featuredLabel": "Featured",
+    "unfeaturedLabel": "Unfeatured",
+    "featuredTip": "Официально выбран как избранный. Ваш шаблон получит больше внимания.",
+    "unfeaturedTip": "Пока не избран. Продолжайте улучшать, чтобы получить шанс на рекомендацию. Пусть больше людей увидят вашу работу.",
+    "publishSuccessDescription": "Поделитесь своей работой с миром",
+    "shareWith": "Поделиться с",
+    "unpublishedApps": {
+      "title": "Обнаружены неопубликованные приложения",
+      "description": "Неопубликованные приложения могут вызвать ошибки предпросмотра шаблона. Опубликуйте их сейчас или продолжите.",
+      "publishAll": "Опубликовать все",
+      "publish": "Опубликовать",
+      "published": "Опубликовано",
+      "publishing": "Публикация...",
+      "publishFailed": "Ошибка публикации",
+      "publishFailedTip1": "Проверьте, может ли исходное приложение быть успешно опубликовано",
+      "publishFailedTip2": "Попробуйте повторно опубликовать этот шаблон",
+      "notPublished": "Не опубликовано",
+      "ignoreAndContinue": "Игнорировать и продолжить",
+      "goToFix": "Перейти к исправлению",
+      "redeploy": "Повторить развёртывание",
+      "unnamedApp": "Безымянное приложение"
+    }
+  }
+}

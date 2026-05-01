@@ -1,21 +1,17 @@
 import type { IGetRecordsRo } from '@teable/openapi';
-import type {
-  UserField,
-  AttachmentField,
-  SingleSelectField,
-  IFieldInstance,
-} from '@teable/sdk/model';
+import type { AttachmentField, IFieldInstance } from '@teable/sdk/model';
 import type { Dispatch, SetStateAction } from 'react';
 import { createContext } from 'react';
 import type { IKanbanPermission, IStackData } from '../type';
 
 export interface IKanbanContext {
   recordQuery?: Pick<IGetRecordsRo, 'filter' | 'orderBy'>;
-  stackField?: SingleSelectField | UserField;
+  stackField?: IFieldInstance;
   stackCollection?: IStackData[];
   coverField?: AttachmentField;
   isCoverFit?: boolean;
   isFieldNameHidden?: boolean;
+  isEmptyStackHidden?: boolean;
   permission: IKanbanPermission;
   primaryField: IFieldInstance;
   displayFields: IFieldInstance[];

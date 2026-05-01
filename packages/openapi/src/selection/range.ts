@@ -16,7 +16,7 @@ export const cellSchema = z.tuple([z.number(), z.number()]);
 
 export type ICell = z.infer<typeof cellSchema>;
 
-const rangeTypeSchema = z.nativeEnum(RangeType).optional().openapi({
+const rangeTypeSchema = z.enum(RangeType).optional().meta({
   description: 'Types of non-contiguous selections',
   example: RangeType.Columns,
 });
@@ -29,8 +29,12 @@ export const rangesRoSchema = contentQueryBaseSchema.extend({
   filter: filterSchema.optional(),
   orderBy: orderBySchema.optional(),
   groupBy: groupSchema.optional(),
-  excludeFieldIds: z.array(z.string().startsWith(IdPrefix.Field)).optional(),
-  ranges: rangesSchema.openapi({
+  collapsedGroupIds: z.array(z.string()).optional(),
+  projection: z.array(z.string().startsWith(IdPrefix.Field)).optional().meta({
+    description:
+      'If you want to get only some fields, pass in this parameter, otherwise all visible fields will be obtained',
+  }),
+  ranges: rangesSchema.meta({
     description:
       'The parameter "ranges" is used to represent the coordinates of a selected range in a table. ',
     example: [
@@ -44,20 +48,25 @@ export const rangesRoSchema = contentQueryBaseSchema.extend({
 export type IRangesRo = z.infer<typeof rangesRoSchema>;
 
 export const rangesQuerySchema = contentQueryBaseSchema.extend({
-  excludeFieldIds: z.array(z.string().startsWith(IdPrefix.Field)).optional(),
+  projection: z.array(z.string().startsWith(IdPrefix.Field)).optional().meta({
+    description:
+      'If you want to get only some fields, pass in this parameter, otherwise all visible fields will be obtained',
+  }),
   ranges: z
     .string()
     .transform((value, ctx) => {
       const parsingResult = rangesSchema.safeParse(JSON.parse(value));
       if (!parsingResult.success) {
         parsingResult.error.issues.forEach((issue) => {
-          ctx.addIssue(issue);
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { path, ...issueWithoutPath } = issue;
+          ctx.addIssue(issueWithoutPath);
         });
         return z.NEVER;
       }
       return parsingResult.data;
     })
-    .openapi({
+    .meta({
       type: 'string',
       description:
         'The parameter "ranges" is used to represent the coordinates [column, row][] of a selected range in a table. ',
@@ -73,7 +82,7 @@ export enum IdReturnType {
 }
 
 export const rangesToIdQuerySchema = rangesQuerySchema.extend({
-  returnType: z.nativeEnum(IdReturnType).openapi({ description: 'Define which Id to return.' }),
+  returnType: z.enum(IdReturnType).meta({ description: 'Define which Id to return.' }),
 });
 
 export type IRangesToIdQuery = z.infer<typeof rangesToIdQuerySchema>;
@@ -88,7 +97,9 @@ export type IRangesToIdVo = z.infer<typeof rangesToIdVoSchema>;
 export const GetIdsFromRangesRoute: RouteConfig = registerRoute({
   method: 'get',
   path: GET_IDS_FROM_RANGES_URL,
-  description: 'Get the id of records and fields from the selected range',
+  summary: 'Get ids from range',
+  description:
+    'Retrieve record and field identifiers based on the selected range coordinates in a table',
   request: {
     params: z.object({
       tableId: z.string(),

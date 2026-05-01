@@ -4,8 +4,8 @@ import { getTableById as apiGetTableById, getFields as apiGetFields } from '@tea
 import { ReactQueryKeys } from '@teable/sdk/config';
 import { useBaseId } from '@teable/sdk/hooks';
 import { isEqual } from 'lodash';
+import { useTranslation } from 'next-i18next';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import { InplaceImportOptionPanel } from '../CollapsePanel';
 import { InplacePreviewColumn } from './InplacePreviewColumn';
 
@@ -45,6 +45,8 @@ const InplaceFieldConfigPanel = (props: IInplaceFieldConfigPanel) => {
     queryFn: () => apiGetFields(tableId).then((data) => data.data),
   });
 
+  const fieldWithPermission = fields?.filter(({ recordRead }) => recordRead !== false);
+
   const optionHandler = (value: IInplaceOption, propertyName: keyof IInplaceOption) => {
     const newInsertConfig = {
       ...insertConfig,
@@ -82,12 +84,12 @@ const InplaceFieldConfigPanel = (props: IInplaceFieldConfigPanel) => {
         </p>
       </div>
 
-      {fields && (
+      {fieldWithPermission && (
         <div className="my-2 h-[400px] overflow-y-auto rounded-sm border border-secondary">
           <InplacePreviewColumn
             onChange={columnHandler}
             workSheets={workSheets}
-            fields={fields}
+            fields={fieldWithPermission}
             insertConfig={insertConfig}
           ></InplacePreviewColumn>
         </div>

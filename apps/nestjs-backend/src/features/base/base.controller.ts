@@ -1,5 +1,5 @@
 /* eslint-disable sonarjs/no-duplicate-string */
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import type { IBaseRole } from '@teable/core';
 import {
   createBaseRoSchema,
@@ -12,8 +12,6 @@ import {
   ICreateBaseFromTemplateRo,
   updateOrderRoSchema,
   IUpdateOrderRo,
-  baseQuerySchemaRo,
-  IBaseQuerySchemaRo,
   createBaseInvitationLinkRoSchema,
   CreateBaseInvitationLinkRo,
   updateBaseInvitationLinkRoSchema,
@@ -23,30 +21,50 @@ import {
   UpdateBaseCollaborateRo,
   UpdateBaseInvitationLinkRo,
   CollaboratorType,
+  listBaseCollaboratorRoSchema,
+  ListBaseCollaboratorRo,
+  deleteBaseCollaboratorRoSchema,
+  DeleteBaseCollaboratorRo,
+  addBaseCollaboratorRoSchema,
+  AddBaseCollaboratorRo,
+  listBaseCollaboratorUserRoSchema,
+  IListBaseCollaboratorUserRo,
+  ImportBaseRo,
+  importBaseRoSchema,
+  moveBaseRoSchema,
+  IMoveBaseRo,
+  publishBaseRoSchema,
+  IPublishBaseRo,
 } from '@teable/openapi';
 import type {
   CreateBaseInvitationLinkVo,
   EmailInvitationVo,
+  IBaseErdVo,
   ICreateBaseVo,
   IDbConnectionVo,
   IGetBaseAllVo,
   IGetBasePermissionVo,
   IGetBaseVo,
   IGetSharedBaseVo,
+  IImportBaseVo,
+  IListBaseCollaboratorUserVo,
   IUpdateBaseVo,
   ListBaseCollaboratorVo,
   ListBaseInvitationLinkVo,
   UpdateBaseInvitationLinkVo,
+  ICreateBaseFromTemplateVo,
 } from '@teable/openapi';
+import { Response as ExpressResponse } from 'express';
 import { EmitControllerEvent } from '../../event-emitter/decorators/emit-controller-event.decorator';
 import { Events } from '../../event-emitter/events';
 import { ZodValidationPipe } from '../../zod.validation.pipe';
+import { AllowAnonymous, AllowAnonymousType } from '../auth/decorators/allow-anonymous.decorator';
 import { Permissions } from '../auth/decorators/permissions.decorator';
 import { ResourceMeta } from '../auth/decorators/resource_meta.decorator';
-import { TokenAccess } from '../auth/decorators/token.decorator';
 import { CollaboratorService } from '../collaborator/collaborator.service';
 import { InvitationService } from '../invitation/invitation.service';
-import { BaseQueryService } from './base-query/base-query.service';
+import { BaseExportService } from './base-export.service';
+import { BaseImportService } from './base-import.service';
 import { BaseService } from './base.service';
 import { DbConnectionService } from './db-connection.service';
 
@@ -54,9 +72,10 @@ import { DbConnectionService } from './db-connection.service';
 export class BaseController {
   constructor(
     private readonly baseService: BaseService,
+    private readonly baseExportService: BaseExportService,
+    private readonly baseImportService: BaseImportService,
     private readonly dbConnectionService: DbConnectionService,
     private readonly collaboratorService: CollaboratorService,
-    private readonly baseQueryService: BaseQueryService,
     private readonly invitationService: InvitationService
   ) {}
 
@@ -67,8 +86,67 @@ export class BaseController {
   async createBase(
     @Body(new ZodValidationPipe(createBaseRoSchema))
     createBaseRo: ICreateBaseRo
-  ): Promise<ICreateBaseVo> {
+  ) {
     return await this.baseService.createBase(createBaseRo);
+  }
+
+  @Post('import')
+  @Permissions('base|create')
+  @ResourceMeta('spaceId', 'body')
+  @EmitControllerEvent(Events.BASE_CREATE)
+  async importBase(
+    @Body(new ZodValidationPipe(importBaseRoSchema))
+    importBaseRo: ImportBaseRo
+  ): Promise<IImportBaseVo> {
+    return await this.baseImportService.importBase(importBaseRo);
+  }
+
+  @Post('import-stream')
+  @Permissions('base|create')
+  @ResourceMeta('spaceId', 'body')
+  async importBaseStream(
+    @Body(new ZodValidationPipe(importBaseRoSchema))
+    importBaseRo: ImportBaseRo,
+    @Res() res: ExpressResponse
+  ) {
+    const sseHeartbeatMs = 15_000;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const isStreamClosed = () => res.writableEnded || res.destroyed;
+    const sendEvent = (data: unknown) => {
+      if (isStreamClosed()) return;
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      (res as ExpressResponse & { flush?: () => void }).flush?.();
+    };
+    const heartbeat = setInterval(() => {
+      if (isStreamClosed()) return;
+      res.write(': ping\n\n');
+      (res as ExpressResponse & { flush?: () => void }).flush?.();
+    }, sseHeartbeatMs);
+    res.on('close', () => clearInterval(heartbeat));
+
+    try {
+      const result = await this.baseImportService.importBase(
+        importBaseRo,
+        (phase: string, detail?: string) => {
+          sendEvent({ type: 'progress', phase, detail });
+        }
+      );
+
+      sendEvent({ type: 'done', data: result });
+    } catch (error) {
+      sendEvent({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Unknown import error',
+      });
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+    }
   }
 
   @Post('duplicate')
@@ -78,7 +156,7 @@ export class BaseController {
   async duplicateBase(
     @Body(new ZodValidationPipe(duplicateBaseRoSchema))
     duplicateBaseRo: IDuplicateBaseRo
-  ): Promise<ICreateBaseRo> {
+  ): Promise<ICreateBaseVo> {
     return await this.baseService.duplicateBase(duplicateBaseRo);
   }
 
@@ -89,7 +167,7 @@ export class BaseController {
   async createBaseFromTemplate(
     @Body(new ZodValidationPipe(createBaseFromTemplateRoSchema))
     createBaseFromTemplateRo: ICreateBaseFromTemplateRo
-  ): Promise<ICreateBaseVo> {
+  ): Promise<ICreateBaseFromTemplateVo> {
     return await this.baseService.createBaseFromTemplate(createBaseFromTemplateRo);
   }
 
@@ -120,19 +198,15 @@ export class BaseController {
 
   @Permissions('base|read')
   @Get(':baseId')
+  @AllowAnonymous(AllowAnonymousType.PUBLIC)
   async getBaseById(@Param('baseId') baseId: string): Promise<IGetBaseVo> {
     return await this.baseService.getBaseById(baseId);
   }
 
+  @Permissions('base|read_all')
   @Get('access/all')
   async getAllBase(): Promise<IGetBaseAllVo> {
     return this.baseService.getAllBaseList();
-  }
-
-  @Get('access/list')
-  @TokenAccess()
-  async getAccessBase(): Promise<{ id: string; name: string }[]> {
-    return this.baseService.getAccessBaseList();
   }
 
   @Delete(':baseId')
@@ -144,7 +218,7 @@ export class BaseController {
 
   @Permissions('base|db_connection')
   @Post(':baseId/connection')
-  async createDbConnection(@Param('baseId') baseId: string): Promise<IDbConnectionVo> {
+  async createDbConnection(@Param('baseId') baseId: string): Promise<IDbConnectionVo | null> {
     return await this.dbConnectionService.create(baseId);
   }
 
@@ -163,22 +237,21 @@ export class BaseController {
 
   @Permissions('base|read')
   @Get(':baseId/collaborators')
-  async listCollaborator(@Param('baseId') baseId: string): Promise<ListBaseCollaboratorVo> {
-    return await this.collaboratorService.getListByBase(baseId);
+  async listCollaborator(
+    @Param('baseId') baseId: string,
+    @Query(new ZodValidationPipe(listBaseCollaboratorRoSchema)) options: ListBaseCollaboratorRo
+  ): Promise<ListBaseCollaboratorVo> {
+    return {
+      collaborators: await this.collaboratorService.getListByBase(baseId, options),
+      total: await this.collaboratorService.getTotalBase(baseId, options),
+    };
   }
 
   @Permissions('base|read')
   @Get(':baseId/permission')
+  @AllowAnonymous(AllowAnonymousType.PUBLIC)
   async getPermission(): Promise<IGetBasePermissionVo> {
     return await this.baseService.getPermission();
-  }
-
-  @Get(':baseId/query')
-  async sqlQuery(
-    @Param('baseId') baseId: string,
-    @Query(new ZodValidationPipe(baseQuerySchemaRo)) query: IBaseQuerySchemaRo
-  ) {
-    return this.baseQueryService.baseQuery(baseId, query.query);
   }
 
   @Permissions('base|invite_link')
@@ -259,20 +332,87 @@ export class BaseController {
     await this.collaboratorService.updateCollaborator({
       resourceId: baseId,
       resourceType: CollaboratorType.Base,
-      userId: updateBaseCollaborateRo.userId,
-      role: updateBaseCollaborateRo.role,
+      ...updateBaseCollaborateRo,
     });
   }
 
   @Delete(':baseId/collaborators')
   async deleteCollaborator(
     @Param('baseId') baseId: string,
-    @Query('userId') userId: string
+    @Query(new ZodValidationPipe(deleteBaseCollaboratorRoSchema))
+    deleteBaseCollaboratorRo: DeleteBaseCollaboratorRo
   ): Promise<void> {
     await this.collaboratorService.deleteCollaborator({
       resourceId: baseId,
       resourceType: CollaboratorType.Base,
-      userId,
+      ...deleteBaseCollaboratorRo,
     });
+  }
+
+  @Delete(':baseId/permanent')
+  @EmitControllerEvent(Events.BASE_DELETE)
+  async permanentDeleteBase(@Param('baseId') baseId: string) {
+    await this.baseService.permanentDeleteBase(baseId);
+    return { baseId, permanent: true };
+  }
+
+  @Post(':baseId/collaborator')
+  async addCollaborators(
+    @Param('baseId') baseId: string,
+    @Body(new ZodValidationPipe(addBaseCollaboratorRoSchema))
+    addBaseCollaboratorRo: AddBaseCollaboratorRo
+  ) {
+    return await this.collaboratorService.addBaseCollaborators(baseId, addBaseCollaboratorRo);
+  }
+
+  @Permissions('base|read')
+  @Get(':baseId/collaborators/users')
+  async getUserCollaborators(
+    @Param('baseId') baseId: string,
+    @Query(new ZodValidationPipe(listBaseCollaboratorUserRoSchema))
+    listBaseCollaboratorUserRo: IListBaseCollaboratorUserRo
+  ): Promise<IListBaseCollaboratorUserVo> {
+    return {
+      users: await this.collaboratorService.getUserCollaborators(
+        baseId,
+        listBaseCollaboratorUserRo
+      ),
+      total: await this.collaboratorService.getUserCollaboratorsTotal(
+        baseId,
+        listBaseCollaboratorUserRo
+      ),
+    };
+  }
+
+  @Permissions('base|read')
+  @Get(':baseId/export')
+  async exportBase(@Param('baseId') baseId: string, @Query('includeData') includeData?: string) {
+    const includeDataValue =
+      includeData === undefined ? true : !['false', '0'].includes(includeData.toLowerCase());
+    return await this.baseExportService.exportBaseZip(baseId, includeDataValue);
+  }
+
+  @Put(':baseId/move')
+  @Permissions('space|update')
+  async moveBase(
+    @Param('baseId') baseId: string,
+    @Body(new ZodValidationPipe(moveBaseRoSchema)) moveBaseRo: IMoveBaseRo
+  ) {
+    await this.baseService.moveBase(baseId, moveBaseRo);
+  }
+
+  @Permissions('base|update')
+  @Get(':baseId/erd')
+  async generateBaseErd(@Param('baseId') baseId: string): Promise<IBaseErdVo> {
+    return await this.baseService.generateBaseErd(baseId);
+  }
+
+  @Permissions('base|update')
+  @Post(':baseId/publish')
+  async publishBase(
+    @Param('baseId') baseId: string,
+    @Body(new ZodValidationPipe(publishBaseRoSchema)) publishBaseRo: IPublishBaseRo
+  ) {
+    return await this.baseService.publishBase(baseId, publishBaseRo);
   }
 }

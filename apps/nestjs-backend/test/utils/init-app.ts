@@ -1,4 +1,5 @@
 /* eslint-disable sonarjs/no-duplicate-string */
+import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WsAdapter } from '@nestjs/platform-ws';
@@ -14,8 +15,10 @@ import type {
   IViewVo,
   IFilterRo,
   IViewRo,
+  IConditionalRollupFieldOptions,
+  IFilter,
 } from '@teable/core';
-import { FieldKeyType } from '@teable/core';
+import { FieldKeyType, FieldType } from '@teable/core';
 import type {
   ICreateRecordsRo,
   ICreateRecordsVo,
@@ -24,6 +27,9 @@ import type {
   IRecordsVo,
   IUpdateRecordRo,
   ITableFullVo,
+  ICreateSpaceRo,
+  ICreateBaseRo,
+  IRecordInsertOrderRo,
 } from '@teable/openapi';
 import {
   axios,
@@ -37,24 +43,37 @@ import {
   createField as apiCreateField,
   deleteField as apiDeleteField,
   convertField as apiConvertField,
+  duplicateRecord as apiDuplicateRecord,
   getFields as apiGetFields,
   getField as apiGetField,
   getViewList as apiGetViewList,
-  getViewById as apiGetViewById,
+  getView as apiGetViewById,
   updateViewColumnMeta as apiSetViewColumnMeta,
   createTable as apiCreateTable,
-  deleteTableArbitrary as apiDeleteTableArbitrary,
+  deleteTable as apiDeleteTable,
+  permanentDeleteTable as apiPermanentDeleteTable,
   getTableById as apiGetTableById,
   updateViewFilter as apiSetViewFilter,
   createView as apiCreateView,
+  createSpace as apiCreateSpace,
+  deleteSpace as apiDeleteSpace,
+  createBase as apiCreateBase,
+  deleteBase as apiDeleteBase,
+  permanentDeleteSpace as apiPermanentDeleteSpace,
+  permanentDeleteBase as apiPermanentDeleteBase,
 } from '@teable/openapi';
 import { json, urlencoded } from 'express';
+import type { ClsService } from 'nestjs-cls';
 import { AppModule } from '../../src/app.module';
 import type { IBaseConfig } from '../../src/configs/base.config';
 import { baseConfig } from '../../src/configs/base.config';
 import { SessionHandleService } from '../../src/features/auth/session/session-handle.service';
+import { BaseSqlExecutorModule } from '../../src/features/base-sql-executor/base-sql-executor.module';
+import { FieldOpenApiV2Service } from '../../src/features/field/open-api/field-open-api-v2.service';
 import { NextService } from '../../src/features/next/next.service';
+import { TableIndexService } from '../../src/features/table/table-index.service';
 import { GlobalExceptionFilter } from '../../src/filter/global-exception.filter';
+import type { IClsStore } from '../../src/types/cls';
 import { WsGateway } from '../../src/ws/ws.gateway';
 import { DevWsGateway } from '../../src/ws/ws.gateway.dev';
 import { TestingLogger } from './testing-logger';
@@ -64,7 +83,7 @@ export async function initApp() {
   if (globalThis.initApp) return await globalThis.initApp();
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
-    imports: [AppModule],
+    imports: [AppModule, BaseSqlExecutorModule],
   })
     .overrideProvider(NextService)
     .useValue({
@@ -101,6 +120,7 @@ export async function initApp() {
   process.env.STORAGE_PREFIX = url;
   const baseConfigService = app.get(baseConfig.KEY) as IBaseConfig;
   baseConfigService.storagePrefix = url;
+  baseConfigService.recordHistoryDisabled = true;
 
   axios.defaults.baseURL = url + '/api';
 
@@ -116,6 +136,8 @@ export async function initApp() {
   const now = new Date();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   console.log(`> Test NODE_ENV is ${process.env.NODE_ENV}`);
+  console.log(`> Test V2_COMPUTED_UPDATE_MODE is ${process.env.V2_COMPUTED_UPDATE_MODE}`);
+  console.log(`> Test FORCE_V2_ALL is ${process.env.FORCE_V2_ALL}`);
   console.log(`> Test Ready on ${url}`);
   console.log('> Test System Time Zone:', timeZone);
   console.log('> Test Current System Time:', now.toString());
@@ -131,6 +153,41 @@ export async function initApp() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any),
   };
+}
+
+/**
+ * Helper function to run code within CLS context with test user
+ */
+export async function runWithTestUser<T>(
+  clsService: ClsService<IClsStore>,
+  fn: () => Promise<T>,
+  userOverrides?: Partial<IClsStore['user']>
+): Promise<T> {
+  const testUser: IClsStore['user'] = {
+    id: globalThis.testConfig.userId,
+    name: globalThis.testConfig.userName,
+    email: globalThis.testConfig.email,
+    isAdmin: false,
+    ...userOverrides,
+  };
+
+  const clsStore: IClsStore = {
+    user: testUser,
+    origin: {
+      ip: '127.0.0.1',
+      byApi: false,
+      userAgent: 'test-agent',
+      referer: '',
+    },
+    tx: {},
+    permissions: [],
+  };
+
+  return clsService.runWith(clsStore, fn);
+}
+
+export async function getTableIndexService(app: INestApplication) {
+  return app.get<TableIndexService>(TableIndexService);
 }
 
 export async function createTable(baseId: string, tableVo: ICreateTableRo, expectStatus = 201) {
@@ -149,7 +206,21 @@ export async function createTable(baseId: string, tableVo: ICreateTableRo, expec
 
 export async function deleteTable(baseId: string, tableId: string, expectStatus?: number) {
   try {
-    const res = await apiDeleteTableArbitrary(baseId, tableId);
+    const res = await apiDeleteTable(baseId, tableId);
+    expectStatus && expect(res.status).toEqual(expectStatus);
+
+    return res.data;
+  } catch (e: unknown) {
+    if (expectStatus && (e as HttpError).status !== expectStatus) {
+      throw e;
+    }
+    return {} as IRecord;
+  }
+}
+
+export async function permanentDeleteTable(baseId: string, tableId: string, expectStatus?: number) {
+  try {
+    const res = await apiPermanentDeleteTable(baseId, tableId);
     expectStatus && expect(res.status).toEqual(expectStatus);
 
     return res.data;
@@ -269,9 +340,14 @@ export async function getRecord(
   expectStatus = 200
 ): Promise<IRecord> {
   try {
-    const res = await apiGetRecord(tableId, recordId, {
+    const query: { fieldKeyType: FieldKeyType; cellFormat?: CellFormat } = {
       fieldKeyType: FieldKeyType.Id,
-      cellFormat,
+    };
+    if (cellFormat) {
+      query.cellFormat = cellFormat;
+    }
+    const res = await apiGetRecord(tableId, recordId, {
+      ...query,
     });
 
     expect(res.status).toEqual(expectStatus);
@@ -288,6 +364,25 @@ export async function getRecords(tableId: string, query?: IGetRecordsRo): Promis
   const result = await apiGetRecords(tableId, query);
 
   return result.data;
+}
+
+export async function duplicateRecord(
+  tableId: string,
+  recordId: string,
+  order: IRecordInsertOrderRo,
+  expectStatus = 201
+) {
+  try {
+    const res = await apiDuplicateRecord(tableId, recordId, order);
+
+    expect(res.status).toEqual(expectStatus);
+    return res.data;
+  } catch (e: unknown) {
+    if ((e as HttpError).status !== expectStatus) {
+      throw e;
+    }
+    return {} as IRecord;
+  }
 }
 
 export async function createRecords(
@@ -313,13 +408,61 @@ export async function createRecords(
   }
 }
 
+const createDefaultConditionalRollupFilter = (fieldId: string): IFilter => ({
+  conjunction: 'and',
+  filterSet: [
+    {
+      fieldId,
+      operator: 'isNotEmpty',
+      value: null,
+    },
+  ],
+});
+
+const ensureConditionalRollupOptions = (fieldRo: IFieldRo): IFieldRo => {
+  if (fieldRo.type !== FieldType.ConditionalRollup) {
+    return fieldRo;
+  }
+
+  const options = fieldRo.options as Partial<IConditionalRollupFieldOptions> | undefined;
+  if (!options?.lookupFieldId) {
+    return fieldRo;
+  }
+
+  if (options.filter === null) {
+    return {
+      ...fieldRo,
+      options: {
+        ...options,
+        filter: undefined,
+      } as IConditionalRollupFieldOptions,
+    };
+  }
+
+  const hasFilterConditions =
+    options.filter?.filterSet != null && options.filter.filterSet.length > 0;
+
+  if (hasFilterConditions) {
+    return fieldRo;
+  }
+
+  return {
+    ...fieldRo,
+    options: {
+      ...options,
+      filter: createDefaultConditionalRollupFilter(options.lookupFieldId),
+    } as IConditionalRollupFieldOptions,
+  };
+};
+
 export async function createField(
   tableId: string,
   fieldRo: IFieldRo,
   expectStatus = 201
 ): Promise<IFieldVo> {
   try {
-    const res = await apiCreateField(tableId, fieldRo);
+    const normalizedField = ensureConditionalRollupOptions(fieldRo);
+    const res = await apiCreateField(tableId, normalizedField);
 
     expect(res.status).toEqual(expectStatus);
     return res.data;
@@ -329,6 +472,20 @@ export async function createField(
     }
     return {} as IFieldVo;
   }
+}
+
+export async function createFields(
+  tableId: string,
+  fieldRos: IFieldRo[],
+  appInstance?: INestApplication
+): Promise<IFieldVo[]> {
+  const normalizedFields = fieldRos.map((field) => ensureConditionalRollupOptions(field));
+  const app = appInstance ?? (await initApp()).app;
+  const fieldOpenApiV2Service = app.get(FieldOpenApiV2Service);
+  const clsService = (fieldOpenApiV2Service as unknown as { cls: ClsService<IClsStore> }).cls;
+  return await runWithTestUser(clsService, async () =>
+    fieldOpenApiV2Service.createFields(tableId, normalizedFields)
+  );
 }
 
 export async function deleteField(tableId: string, fieldId: string) {
@@ -349,7 +506,8 @@ export async function convertField(
   expectStatus = 200
 ): Promise<IFieldVo> {
   try {
-    const res = await apiConvertField(tableId, fieldId, fieldRo);
+    const normalizedField = ensureConditionalRollupOptions(fieldRo);
+    const res = await apiConvertField(tableId, fieldId, normalizedField);
 
     expect(res.status).toEqual(expectStatus);
     return res.data;
@@ -364,9 +522,10 @@ export async function convertField(
 export async function getFields(
   tableId: string,
   viewId?: string,
-  filterHidden?: boolean
+  filterHidden?: boolean,
+  projection?: string[]
 ): Promise<IFieldVo[]> {
-  const result = await apiGetFields(tableId, { viewId, filterHidden });
+  const result = await apiGetFields(tableId, { viewId, filterHidden, projection });
 
   return result.data;
 }
@@ -415,5 +574,35 @@ export async function updateViewColumnMeta(
 
 export async function updateViewFilter(tableId: string, viewId: string, filterRo: IFilterRo) {
   const result = await apiSetViewFilter(tableId, viewId, filterRo);
+  return result.data;
+}
+
+export async function createSpace(spaceRo: ICreateSpaceRo) {
+  const result = await apiCreateSpace(spaceRo);
+  return result.data;
+}
+
+export async function deleteSpace(spaceId: string) {
+  const result = await apiDeleteSpace(spaceId);
+  return result.data;
+}
+
+export async function permanentDeleteSpace(spaceId: string) {
+  const result = await apiPermanentDeleteSpace(spaceId);
+  return result.data;
+}
+
+export async function createBase(baseRo: ICreateBaseRo) {
+  const result = await apiCreateBase(baseRo);
+  return result.data;
+}
+
+export async function deleteBase(baseId: string) {
+  const result = await apiDeleteBase(baseId);
+  return result.data;
+}
+
+export async function permanentDeleteBase(baseId: string) {
+  const result = await apiPermanentDeleteBase(baseId);
   return result.data;
 }

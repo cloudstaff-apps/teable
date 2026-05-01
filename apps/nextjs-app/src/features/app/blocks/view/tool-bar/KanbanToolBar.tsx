@@ -1,14 +1,14 @@
-import { useTablePermission } from '@teable/sdk/hooks';
 import { KanbanViewOperators } from './components';
+import { useViewConfigurable } from './hook';
 import { Others } from './Others';
 
 export const KanbanToolBar: React.FC = () => {
-  const permission = useTablePermission();
+  const { isViewConfigurable } = useViewConfigurable();
 
   return (
-    <div className="flex items-center gap-2 border-y px-4 py-2 @container/toolbar">
-      <div className="flex flex-1 justify-between">
-        <KanbanViewOperators disabled={!permission['view|update']} />
+    <div className="flex h-12 items-center border-y px-1 py-2 sm:gap-1 sm:px-2 md:gap-2 md:px-4">
+      <div className="flex flex-1 justify-between @container/toolbar">
+        <KanbanViewOperators disabled={!isViewConfigurable} />
         <Others />
       </div>
     </div>

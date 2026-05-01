@@ -21,3 +21,31 @@ export function getBasePermissionUpdateChannel(baseId: string) {
 export function getTableImportChannel(tableId: string) {
   return `__table_import_${tableId}`;
 }
+
+export function getCommentChannel(tableId: string, recordId: string) {
+  return `__record_comment_${tableId}_${recordId}`;
+}
+
+export function getTableCommentChannel(tableId: string) {
+  return `__table_comment_${tableId}`;
+}
+
+export function getTableButtonClickChannel(tableId: string) {
+  return `__table_button_click_${tableId}`;
+}
+
+export function getToolCallChannel(toolCallId: string) {
+  return `__tool_call_${toolCallId}`;
+}
+
+export function getChatChannel(chatId: string) {
+  return `__chat_${chatId}`;
+}
+
+export function getBaseNodeChannel(baseId: string) {
+  return `__base_node_${baseId}`;
+}
+
+export function getWorkflowTestChannel(workflowId: string) {
+  return `__workflow_test_${workflowId}`;
+}

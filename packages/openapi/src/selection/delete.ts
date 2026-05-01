@@ -15,7 +15,8 @@ export type IDeleteVo = z.infer<typeof deleteVoSchema>;
 export const DeleteRoute = registerRoute({
   method: 'delete',
   path: DELETE_URL,
-  description: 'Delete the selected data',
+  summary: 'Delete selected range data',
+  description: 'Delete records or fields within the selected table range',
   request: {
     params: z.object({
       tableId: z.string(),
@@ -47,6 +48,7 @@ export const deleteSelection = async (tableId: string, deleteRo: IRangesRo) => {
         orderBy: JSON.stringify(deleteRo.orderBy),
         groupBy: JSON.stringify(deleteRo.groupBy),
         ranges: JSON.stringify(deleteRo.ranges),
+        collapsedGroupIds: JSON.stringify(deleteRo.collapsedGroupIds),
       },
     }
   );

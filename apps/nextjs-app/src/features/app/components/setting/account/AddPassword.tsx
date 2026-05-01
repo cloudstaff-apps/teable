@@ -1,6 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { addPassword } from '@teable/openapi';
-import { passwordSchema } from '@teable/openapi/src/auth/types';
+import { addPassword, passwordSchema } from '@teable/openapi';
 import { useSession } from '@teable/sdk/hooks';
 import { Error, Spin } from '@teable/ui-lib/base';
 import {
@@ -14,8 +13,8 @@ import {
   DialogTrigger,
   Input,
   Label,
-  useToast,
 } from '@teable/ui-lib/shadcn';
+import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { useTranslation } from 'next-i18next';
 import { useEffect, useState } from 'react';
 
@@ -25,13 +24,12 @@ export const AddPassword = () => {
   const { t } = useTranslation('common');
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
-  const { toast } = useToast();
   const { refresh } = useSession();
 
-  const { mutateAsync: addPasswordMutate, isLoading } = useMutation({
+  const { mutateAsync: addPasswordMutate, isPending: isLoading } = useMutation({
     mutationFn: addPassword,
     onSuccess: () => {
-      toast({ title: t('settings.account.addPasswordSuccess.title') });
+      toast.success(t('settings.account.addPasswordSuccess.title'));
       setOpen(false);
       refresh();
     },
@@ -43,7 +41,7 @@ export const AddPassword = () => {
       return;
     }
     if (newPassword && confirmPassword && !passwordSchema.safeParse(newPassword).success) {
-      setError(t('settings.account.addPasswordError.invalid'));
+      setError(t('password.setInvalid'));
       return;
     }
     setError('');
@@ -79,7 +77,7 @@ export const AddPassword = () => {
                 {t('settings.account.addPassword.password')}
               </Label>
               <Input
-                className="h-7"
+                size="sm"
                 id="newPassword"
                 autoComplete="new-password"
                 type="password"
@@ -93,7 +91,7 @@ export const AddPassword = () => {
                 {t('settings.account.addPassword.confirm')}
               </Label>
               <Input
-                className="h-7"
+                size="sm"
                 id="confirmPassword"
                 autoComplete="new-password"
                 type="password"

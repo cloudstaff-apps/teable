@@ -7,16 +7,17 @@ import { getBaseItemSchema } from './get';
 
 export const GET_BASE_ALL = '/base/access/all';
 
-export type IGetBaseAllVo = Omit<IGetBaseVo, 'isUnrestricted'>[];
+export type IGetBaseAllVo = Omit<IGetBaseVo, 'collaboratorType'>[];
 
 export const GetBaseAllRoute: RouteConfig = registerRoute({
   method: 'get',
   path: GET_BASE_ALL,
-  description: 'Get base list by query',
+  summary: 'Get all base list',
+  description: 'Get all bases that the current user has access to',
   request: {},
   responses: {
     200: {
-      description: 'Returns the list of base.',
+      description: 'Returns the list of bases accessible to the current user.',
       content: {
         'application/json': {
           schema: z.array(getBaseItemSchema),

@@ -1,6 +1,6 @@
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
-import type { Axios, AxiosResponse } from 'axios';
-import { axios as axiosInstance } from '../../axios';
+import type { AxiosResponse } from 'axios';
+import { axios } from '../../axios';
 import { registerRoute, urlBuilder } from '../../utils';
 import { z } from '../../zod';
 
@@ -11,8 +11,8 @@ export enum RecurringIntervalType {
 
 export enum BillingProductLevel {
   Free = 'free',
-  Plus = 'plus',
   Pro = 'pro',
+  Business = 'business',
   Enterprise = 'enterprise',
 }
 
@@ -28,10 +28,14 @@ export enum SubscriptionStatus {
   SeatLimitExceeded = 'seat_limit_exceeded',
 }
 
+export const appSumoTierSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
+export type IAppSumoTier = z.infer<typeof appSumoTierSchema>;
+
 export const subscriptionSummaryVoSchema = z.object({
   spaceId: z.string(),
-  status: z.nativeEnum(SubscriptionStatus),
-  level: z.nativeEnum(BillingProductLevel),
+  status: z.enum(SubscriptionStatus),
+  level: z.enum(BillingProductLevel),
+  appSumoTier: appSumoTierSchema.optional(),
 });
 
 export type ISubscriptionSummaryVo = z.infer<typeof subscriptionSummaryVoSchema>;
@@ -62,20 +66,10 @@ export const GetSubscriptionSummaryRoute: RouteConfig = registerRoute({
 
 export async function getSubscriptionSummary(
   spaceId: string
-): Promise<AxiosResponse<ISubscriptionSummaryVo>>;
-export async function getSubscriptionSummary(
-  axios: Axios,
-  spaceId: string
-): Promise<AxiosResponse<ISubscriptionSummaryVo>>;
-export async function getSubscriptionSummary(
-  axios: Axios | string,
-  spaceId?: string
 ): Promise<AxiosResponse<ISubscriptionSummaryVo>> {
-  const theAxios = typeof axios === 'string' ? axiosInstance : axios;
-  const theSpaceId = typeof axios === 'string' ? axios : spaceId;
-  return theAxios.get<ISubscriptionSummaryVo>(
+  return axios.get<ISubscriptionSummaryVo>(
     urlBuilder(GET_SUBSCRIPTION_SUMMARY, {
-      spaceId: theSpaceId,
+      spaceId: spaceId,
     })
   );
 }

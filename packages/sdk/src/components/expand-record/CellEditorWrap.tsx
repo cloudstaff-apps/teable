@@ -7,7 +7,7 @@ import { LinkDisplayType, LinkEditor } from '../editor';
 
 export const CellEditorWrap = (props: ICellValueEditor) => {
   const { field, wrapClassName, className, cellValue, onChange, readonly, recordId } = props;
-  if (field.type === FieldType.Link) {
+  if (field.type === FieldType.Link && !field.isComputed) {
     return (
       <div className={cn(wrapClassName, 'max-h-96 overflow-auto')}>
         <LinkEditor
@@ -23,5 +23,5 @@ export const CellEditorWrap = (props: ICellValueEditor) => {
       </div>
     );
   }
-  return <CellEditor {...props} />;
+  return <CellEditor {...props} hideExpand />;
 };

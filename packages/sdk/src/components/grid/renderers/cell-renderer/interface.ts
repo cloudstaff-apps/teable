@@ -1,4 +1,7 @@
+import type { IButtonFieldCellValue, IButtonFieldOptions } from '@teable/core';
 import type { CSSProperties, ForwardRefRenderFunction } from 'react';
+import type { IButtonClickStatusHook } from '../../../../hooks';
+import type { Record as IRecord } from '../../../../model';
 import type { IEditorProps, IEditorRef } from '../../components';
 import type { IGridTheme } from '../../configs';
 import type { IActiveCellBound, ICellPosition, IRectangle } from '../../interface';
@@ -15,6 +18,7 @@ export enum CellType {
   User = 'User',
   Boolean = 'Boolean',
   Loading = 'Loading',
+  Button = 'Button',
 }
 
 export enum EditorType {
@@ -33,11 +37,14 @@ export interface IBaseCell {
   contentAlign?: 'left' | 'right' | 'center';
   lastUpdated?: string;
   customTheme?: Partial<IGridTheme>;
+  locked?: boolean;
+  hidden?: boolean;
 }
 
 export interface IEditableCell extends IBaseCell {
   editorWidth?: number;
   customEditor?: ICustomEditor;
+  readonlyCustomEditor?: boolean;
 }
 
 export interface ILoadingCell extends IBaseCell {
@@ -125,11 +132,15 @@ export interface ISelectCell extends IEditableCell {
   choiceSorted?: ISelectChoiceSorted[];
   isMultiple?: boolean;
   isEditingOnClick?: boolean;
+  showAddButton?: boolean;
+  onPreview?: (activeId: string) => void;
 }
 
 export interface IImageData {
   id: string;
   url: string;
+  width?: number;
+  height?: number;
 }
 
 export interface IImageCell extends IEditableCell {
@@ -142,13 +153,26 @@ export interface IImageCell extends IEditableCell {
 export interface IUserData {
   id: string;
   name: string;
+  email?: string;
   avatarUrl?: string;
+  isSystem?: boolean;
 }
 
 export interface IUserCell extends IEditableCell {
   type: CellType.User;
   data: IUserData[];
   displayData?: string;
+}
+
+export interface IButtonCell extends IEditableCell {
+  type: CellType.Button;
+  data: {
+    cellValue: IButtonFieldCellValue;
+    fieldOptions: IButtonFieldOptions;
+    tableId: string;
+    statusHook?: IButtonClickStatusHook;
+    record?: IRecord;
+  };
 }
 
 export type IInnerCell =
@@ -160,7 +184,8 @@ export type IInnerCell =
   | IRatingCell
   | IBooleanCell
   | IChartCell
-  | IUserCell;
+  | IUserCell
+  | IButtonCell;
 
 export type ICell = IInnerCell | ILoadingCell;
 
@@ -203,6 +228,7 @@ export enum CellRegionType {
   Update = 'update',
   Preview = 'preview',
   ToggleEditing = 'toggleEditing',
+  Hover = 'hover',
 }
 
 export interface ICellRegionWithBlank {
@@ -210,7 +236,12 @@ export interface ICellRegionWithBlank {
 }
 
 export interface ICellRegionWithData {
-  type: CellRegionType.Update | CellRegionType.ToggleEditing | CellRegionType.Preview;
+  type:
+    | CellRegionType.Update
+    | CellRegionType.ToggleEditing
+    | CellRegionType.Preview
+    | CellRegionType.Blank
+    | CellRegionType.Hover;
   data: unknown;
 }
 

@@ -4,6 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import type {
   IDateFieldOptions,
   IFieldRo,
+  IFieldVo,
   INumberFieldOptions,
   ISelectFieldOptions,
   ISortItem,
@@ -14,16 +15,25 @@ import {
   FieldType,
   formatNumberToString,
   formatDateToString,
+  DateFormattingPreset,
+  TimeFormatting,
+  FieldKeyType,
 } from '@teable/core';
-import type { IGetRecordsRo, ITableFullVo } from '@teable/openapi';
-import { updateViewSort as apiSetViewSort } from '@teable/openapi';
+import type { IGetRecordsRo, ITableFullVo, IViewSortRo } from '@teable/openapi';
+import {
+  updateViewSort as apiSetViewSort,
+  convertField,
+  createRecords,
+  updateRecords,
+  updateViewGroup,
+} from '@teable/openapi';
 import { isEmpty, orderBy } from 'lodash';
 import { x_20 } from './data-helpers/20x';
 import { x_20_link, x_20_link_from_lookups } from './data-helpers/20x-link';
 import {
   createField,
   createTable,
-  deleteTable,
+  permanentDeleteTable,
   getFields,
   getRecords,
   getView,
@@ -32,6 +42,8 @@ import {
 
 let app: INestApplication;
 const baseId = globalThis.testConfig.baseId;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // cellValueType which need to test
 const typeTests = [
@@ -54,6 +66,7 @@ const getSortRecords = async (
   query?: Pick<IGetRecordsRo, 'viewId' | 'orderBy'>
 ) => {
   const result = await getRecords(tableId, {
+    fieldKeyType: FieldKeyType.Id,
     viewId: query?.viewId,
     orderBy: query?.orderBy,
   });
@@ -136,7 +149,7 @@ describe('OpenAPI ViewController view order sort (e2e)', () => {
   });
 
   afterEach(async () => {
-    await deleteTable(baseId, tableId);
+    await permanentDeleteTable(baseId, tableId);
   });
 
   it('/api/table/{tableId}/view/{viewId}/sort sort view order (PUT)', async () => {
@@ -156,6 +169,227 @@ describe('OpenAPI ViewController view order sort (e2e)', () => {
     const viewSort = updatedView.sort;
     expect(viewSort).toEqual(assertSort.sort);
   });
+
+  it('sort date should always use a second precision when formatting time is not none', async () => {
+    await createRecords(tableId, {
+      records: [
+        {
+          fields: {},
+        },
+      ],
+    });
+
+    await delay(1000);
+
+    await createRecords(tableId, {
+      records: [
+        {
+          fields: {},
+        },
+      ],
+    });
+
+    const createdTimeField = await createField(tableId, {
+      name: 'createdTime',
+      type: FieldType.CreatedTime,
+      options: {
+        formatting: {
+          date: DateFormattingPreset.ISO,
+          time: TimeFormatting.Hour24,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      },
+    });
+
+    // asc
+    const ascOrders: IGetRecordsRo['orderBy'] = [
+      { fieldId: createdTimeField.id, order: SortFunc.Asc },
+    ];
+
+    const originRecords = await getSortRecords(tableId, {
+      viewId,
+      orderBy: ascOrders,
+    });
+
+    const assertSort = orderBy(
+      originRecords,
+      ['createdTime', 'autoNumber'],
+      [SortFunc.Asc, SortFunc.Asc]
+    );
+
+    const originId = originRecords.map((record) => record.id);
+
+    const assertId = assertSort.map((record) => record.id);
+
+    expect(originId).toEqual(assertId);
+
+    // desc
+    const descOrders: IGetRecordsRo['orderBy'] = [
+      { fieldId: createdTimeField.id, order: SortFunc.Desc },
+    ];
+
+    const descOriginRecords = await getSortRecords(tableId, {
+      viewId,
+      orderBy: descOrders,
+    });
+
+    const assertDescSort = orderBy(
+      descOriginRecords,
+      ['createdTime', 'autoNumber'],
+      [SortFunc.Desc, SortFunc.Asc]
+    );
+
+    const originDescId = descOriginRecords.map((record) => record.id);
+
+    const assertDescId = assertDescSort.map((record) => record.id);
+
+    expect(originDescId).toEqual(assertDescId);
+  });
+
+  it('sort date should precision should be day when formatting time is none', async () => {
+    await createRecords(tableId, {
+      records: [
+        {
+          fields: {},
+        },
+      ],
+    });
+
+    await delay(1000);
+
+    await createRecords(tableId, {
+      records: [
+        {
+          fields: {},
+        },
+      ],
+    });
+
+    const createdTimeField = await createField(tableId, {
+      name: 'createdTime',
+      type: FieldType.CreatedTime,
+      options: {
+        formatting: {
+          date: DateFormattingPreset.ISO,
+          time: TimeFormatting.None,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      },
+    });
+
+    // asc
+    const ascOrders: IGetRecordsRo['orderBy'] = [
+      { fieldId: createdTimeField.id, order: SortFunc.Asc },
+    ];
+
+    const originRecords = await getSortRecords(tableId, {
+      viewId,
+      orderBy: ascOrders,
+    });
+
+    const assertSort = orderBy(
+      originRecords,
+      ['createdTime', 'autoNumber'],
+      [SortFunc.Asc, SortFunc.Asc]
+    );
+
+    const originId = originRecords.map((record) => record.id);
+
+    const assertId = assertSort.map((record) => record.id);
+
+    expect(originId).toEqual(assertId);
+
+    // desc
+    const descOrders: IGetRecordsRo['orderBy'] = [
+      { fieldId: createdTimeField.id, order: SortFunc.Desc },
+    ];
+
+    const descOriginRecords = await getSortRecords(tableId, {
+      viewId,
+      orderBy: descOrders,
+    });
+
+    const ascOriginRecords = await getSortRecords(tableId, {
+      viewId,
+      orderBy: ascOrders,
+    });
+
+    const descRecordsDescId = descOriginRecords.map((record) => record.id);
+
+    const ascRecordsDescId = ascOriginRecords.map((record) => record.id);
+
+    // if time is none, the sort precision should be day, meaning that the sort by day instead of second
+    expect(descRecordsDescId).toEqual(ascRecordsDescId);
+
+    // then group by createdTime, and sort by single select field
+    const fields = await getFields(tableId);
+    const singleSelectField = fields.find((field) => field.type === FieldType.SingleSelect)!;
+    await convertField(tableId, singleSelectField.id, {
+      dbFieldName: singleSelectField.dbFieldName,
+      type: singleSelectField.type as FieldType,
+      options: {
+        choices: [
+          { name: '1', color: 'cyanLight2' },
+          { name: '2', color: 'yellowDark1' },
+          { name: '3', color: 'yellowLight1' },
+          { name: '4', color: 'orangeBright' },
+          { name: '5', color: 'yellowLight2' },
+        ],
+      },
+    });
+    await updateRecords(tableId, {
+      fieldKeyType: FieldKeyType.Id,
+      typecast: true,
+      records: ascRecordsDescId.reverse().map((id, index) => ({
+        id,
+        fields: {
+          [singleSelectField.id!]: index + 1,
+        },
+      })),
+    });
+    const createTimeField = await createField(tableId, {
+      name: 'createdTime',
+      type: FieldType.CreatedTime,
+      options: {
+        formatting: {
+          date: DateFormattingPreset.ISO,
+          time: TimeFormatting.None,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      },
+    });
+
+    await apiSetViewSort(tableId, viewId, {
+      sort: {
+        sortObjs: [{ fieldId: singleSelectField.id, order: SortFunc.Asc }],
+      },
+    });
+
+    await updateViewGroup(tableId, viewId, {
+      group: [{ fieldId: createTimeField.id, order: SortFunc.Asc }],
+    });
+
+    const records = await getRecords(tableId, {
+      viewId,
+    });
+
+    const assertRecordIds = orderBy(records.records, [`fields.${singleSelectField.name}`], ['asc']);
+
+    expect(records.records.map((r) => r.id)).toEqual(assertRecordIds.map((r) => r.id));
+  });
+
+  it('should not allow to modify sort for button field', async () => {
+    const buttonField = await createField(tableId, {
+      type: FieldType.Button,
+    });
+    const assertSort: IViewSortRo = {
+      sort: {
+        sortObjs: [{ fieldId: buttonField.id, order: SortFunc.Asc }],
+      },
+    };
+
+    await expect(apiSetViewSort(tableId, viewId, assertSort)).rejects.toThrow();
+  });
 });
 
 describe('OpenAPI Sort (e2e) Base CellValueType', () => {
@@ -170,7 +404,7 @@ describe('OpenAPI Sort (e2e) Base CellValueType', () => {
   });
 
   afterAll(async () => {
-    await deleteTable(baseId, table.id);
+    await permanentDeleteTable(baseId, table.id);
   });
 
   test.each(typeTests)(
@@ -289,8 +523,8 @@ describe('OpenAPI Sort (e2e) Multiple CellValueType', () => {
   });
 
   afterAll(async () => {
-    await deleteTable(baseId, mainTable.id);
-    await deleteTable(baseId, subTable.id);
+    await permanentDeleteTable(baseId, mainTable.id);
+    await permanentDeleteTable(baseId, subTable.id);
   });
 
   test.each(typeTests)(
@@ -335,6 +569,90 @@ describe('OpenAPI Sort (e2e) Multiple CellValueType', () => {
 
       const ascManualSortRecords = getRecordsByOrder(ascOriginRecords, ascOrders, fields2);
       const descManualSortRecords = getRecordsByOrder(descOriginRecords, descOrders, fields2);
+
+      expect(ascOriginRecords).toEqual(ascManualSortRecords);
+      expect(descOriginRecords).toEqual(descManualSortRecords);
+    }
+  );
+});
+
+describe('OpenAPI Sort (e2e) Date Formatting', () => {
+  let tableId: string;
+  let viewId: string;
+  let fields: IFieldVo[];
+
+  const generateDateField = (name: string, date: DateFormattingPreset) => {
+    return {
+      name,
+      type: FieldType.Date,
+      options: {
+        formatting: {
+          date,
+          time: TimeFormatting.None,
+          timeZone: 'Asia/Singapore',
+        },
+      },
+    };
+  };
+
+  const originFields = [
+    generateDateField('Year', DateFormattingPreset.Y),
+    generateDateField('Month', DateFormattingPreset.YM),
+    generateDateField('Day', DateFormattingPreset.ISO),
+  ];
+
+  const generateFieldValues = (dateString: string) => {
+    return {
+      fields: {
+        [originFields[0].name!]: new Date(dateString).toISOString(),
+        [originFields[1].name!]: new Date(dateString).toISOString(),
+        [originFields[2].name!]: new Date(dateString).toISOString(),
+      },
+    };
+  };
+
+  beforeEach(async () => {
+    const result = await createTable(baseId, {
+      name: 'sort_by_date',
+      fields: originFields,
+      records: [
+        generateFieldValues('2024-01-10 10:00:00'),
+        generateFieldValues('2024-01-10 08:00:00'),
+        generateFieldValues('2023-05-01 09:00:00'),
+        generateFieldValues('2022-08-01 06:00:00'),
+        generateFieldValues('2022-05-01 10:00:00'),
+        generateFieldValues('2024-01-01 10:00:00'),
+      ],
+    });
+    tableId = result.id;
+    viewId = result.defaultViewId!;
+    fields = result.fields!;
+  });
+
+  afterEach(async () => {
+    await permanentDeleteTable(baseId, tableId);
+  });
+
+  test.each([
+    { index: 0, fieldName: originFields[0].name as string },
+    { index: 1, fieldName: originFields[1].name as string },
+    { index: 2, fieldName: originFields[2].name as string },
+  ])(
+    '/api/table/{tableId}/view/{viewId}/sort sort by date with different formatting: $fieldName',
+    async ({ index }) => {
+      const sortByFieldId = fields[index].id as string;
+      const ascOrders: IGetRecordsRo['orderBy'] = [{ fieldId: sortByFieldId, order: SortFunc.Asc }];
+      const descOrders: IGetRecordsRo['orderBy'] = [
+        { fieldId: sortByFieldId, order: SortFunc.Desc },
+      ];
+
+      await setRecordsOrder(tableId, viewId, ascOrders);
+
+      const ascOriginRecords = await getSortRecords(tableId, { orderBy: ascOrders });
+      const descOriginRecords = await getSortRecords(tableId, { orderBy: descOrders });
+
+      const ascManualSortRecords = getRecordsByOrder(ascOriginRecords, ascOrders, fields);
+      const descManualSortRecords = getRecordsByOrder(descOriginRecords, descOrders, fields);
 
       expect(ascOriginRecords).toEqual(ascManualSortRecords);
       expect(descOriginRecords).toEqual(descManualSortRecords);

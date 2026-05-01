@@ -1,14 +1,17 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import type { IFieldRo, ILinkFieldOptions, IRecord, IConvertFieldRo } from '@teable/core';
-import { FieldType, Relationship } from '@teable/core';
-import { PrismaService } from '@teable/db-main-prisma';
+import { Injectable, Logger } from '@nestjs/common';
+import type { IFieldRo, ILinkFieldOptions, IConvertFieldRo } from '@teable/core';
+import { FieldType, Relationship, isLinkLookupOptions } from '@teable/core';
+import type { Field, TableMeta } from '@teable/db-main-prisma';
+import { Prisma, PrismaService } from '@teable/db-main-prisma';
 import type {
   IGraphEdge,
   IGraphNode,
   IGraphCombo,
-  IGraphVo,
   IPlanFieldVo,
   IPlanFieldConvertVo,
+  IPlanFieldDeleteVo,
+  IBaseErdTableNode,
+  IBaseErdEdge,
 } from '@teable/openapi';
 import { Knex } from 'knex';
 import { groupBy, keyBy, uniq } from 'lodash';
@@ -17,9 +20,10 @@ import { IThresholdConfig, ThresholdConfig } from '../../configs/threshold.confi
 import { majorFieldKeysChanged } from '../../utils/major-field-keys-changed';
 import { Timing } from '../../utils/timing';
 import { FieldCalculationService } from '../calculation/field-calculation.service';
-import type { IGraphItem, IRecordItem } from '../calculation/reference.service';
 import { ReferenceService } from '../calculation/reference.service';
+import type { IGraphItem } from '../calculation/utils/dfs';
 import { pruneGraph, topoOrderWithStart } from '../calculation/utils/dfs';
+import { FieldConvertingLinkService } from '../field/field-calculate/field-converting-link.service';
 import { FieldSupplementService } from '../field/field-calculate/field-supplement.service';
 import { FieldService } from '../field/field.service';
 import {
@@ -27,8 +31,6 @@ import {
   type IFieldInstance,
   type IFieldMap,
 } from '../field/model/factory';
-import type { FormulaFieldDto } from '../field/model/field-dto/formula-field.dto';
-import { RecordService } from '../record/record.service';
 
 interface ITinyField {
   id: string;
@@ -36,6 +38,7 @@ interface ITinyField {
   type: string;
   tableId: string;
   isLookup?: boolean | null;
+  isConditionalLookup?: boolean | null;
 }
 
 interface ITinyTable {
@@ -44,157 +47,32 @@ interface ITinyTable {
   dbTableName: string;
 }
 
+interface IAffectedCountQuery {
+  fieldId: string;
+  fieldName: string;
+  query: string;
+}
+
 @Injectable()
 export class GraphService {
   private logger = new Logger(GraphService.name);
 
   constructor(
     private readonly prismaService: PrismaService,
-    private readonly recordService: RecordService,
     private readonly fieldService: FieldService,
     private readonly referenceService: ReferenceService,
     private readonly fieldSupplementService: FieldSupplementService,
     private readonly fieldCalculationService: FieldCalculationService,
+    private readonly fieldConvertingLinkService: FieldConvertingLinkService,
     @InjectModel('CUSTOM_KNEX') private readonly knex: Knex,
     @ThresholdConfig() private readonly thresholdConfig: IThresholdConfig
   ) {}
 
-  private getLookupEdge(
-    field: IFieldInstance,
-    fieldMap: IFieldMap,
-    record: IRecordItem
-  ): IGraphEdge[] | undefined {
-    if (record.dependencies) {
-      let dependentField: IFieldInstance;
-      if (field.lookupOptions) {
-        dependentField = fieldMap[field.lookupOptions.lookupFieldId];
-      } else if (field.type === FieldType.Link) {
-        dependentField = fieldMap[field.options.lookupFieldId];
-      } else {
-        console.error('unsupported dependencies');
-        return;
-      }
-
-      const depends = Array.isArray(record.dependencies)
-        ? record.dependencies
-        : [record.dependencies];
-      return depends.map((dep) => {
-        return {
-          source: `${dependentField.id}_${dep.id}`,
-          target: `${field.id}_${record.record.id}`,
-          label: field.type,
-        };
-      });
-    }
-  }
-
-  private getFormulaEdge(
-    field: FormulaFieldDto,
-    fieldMap: IFieldMap,
-    record: IRecordItem
-  ): IGraphEdge[] | undefined {
-    const refIds = field.getReferenceFieldIds();
-    return refIds.map((fieldId) => {
-      const dependentField = fieldMap[fieldId];
-      return {
-        source: `${dependentField.id}_${record.record.id}`,
-        target: `${field.id}_${record.record.id}`,
-        label: field.type,
-      };
-    });
-  }
-
-  private getCellNodesAndCombos(
-    fieldMap: IFieldMap,
-    tableMap: { [dbTableName: string]: { dbTableName: string; name: string } },
-    selectedCell: { recordId: string; fieldId: string },
-    dbTableName2recordMap: { [dbTableName: string]: Record<string, IRecord> }
-  ) {
-    const nodes: IGraphNode[] = [];
-    const combos: IGraphCombo[] = [];
-    Object.entries(dbTableName2recordMap).forEach(([dbTableName, recordMap]) => {
-      combos.push({
-        id: dbTableName,
-        label: tableMap[dbTableName].name,
-      });
-      Object.values(recordMap).forEach((record) => {
-        Object.entries(record.fields).forEach(([fieldId, cellValue]) => {
-          const field = fieldMap[fieldId];
-          nodes.push({
-            id: `${field.id}_${record.id}`,
-            label: field.cellValue2String(cellValue),
-            comboId: dbTableName,
-            fieldName: field.name,
-            fieldType: field.type,
-            isLookup: field.isLookup,
-            isSelected: field.id === selectedCell.fieldId && record.id === selectedCell.recordId,
-          });
-        });
-      });
-    });
-    return {
-      nodes,
-      combos,
-    };
-  }
-
-  private async getTableMap(tableId2DbTableName: { [tableId: string]: string }) {
-    const tableIds = Object.keys(tableId2DbTableName);
-    const tableRaw = await this.prismaService.tableMeta.findMany({
-      where: { id: { in: tableIds } },
-      select: { dbTableName: true, name: true },
-    });
-    return keyBy(tableRaw, 'dbTableName');
-  }
-
-  async getGraph(tableId: string, cell: [string, string]): Promise<IGraphVo> {
-    const [fieldId, recordId] = cell;
-    const cellValue = await this.recordService.getCellValue(tableId, recordId, fieldId);
-    const prepared = await this.referenceService.prepareCalculation([
-      { id: recordId, fieldId: fieldId, newValue: cellValue },
-    ]);
-    if (!prepared) {
-      return;
-    }
-    const { orderWithRecordsByFieldId, fieldMap, dbTableName2recordMap, tableId2DbTableName } =
-      prepared;
-    const tableMap = await this.getTableMap(tableId2DbTableName);
-    const orderWithRecords = orderWithRecordsByFieldId[fieldId];
-    const { nodes, combos } = this.getCellNodesAndCombos(
-      fieldMap,
-      tableMap,
-      { recordId, fieldId },
-      dbTableName2recordMap
-    );
-    const edges = orderWithRecords.reduce<IGraphEdge[]>((pre, order) => {
-      const field = fieldMap[order.id];
-      Object.values(order.recordItemMap || {}).forEach((record) => {
-        if (field.lookupOptions || field.type === FieldType.Link) {
-          const lookupEdge = this.getLookupEdge(field, fieldMap, record);
-          lookupEdge && pre.push(...lookupEdge);
-          return;
-        }
-
-        if (field.type === FieldType.Formula) {
-          const formulaEdge = this.getFormulaEdge(field, fieldMap, record);
-          formulaEdge && pre.push(...formulaEdge);
-        }
-      });
-
-      return pre;
-    }, []);
-
-    return {
-      nodes,
-      edges,
-      combos,
-    };
-  }
-
   private getFieldNodesAndCombos(
     fieldId: string,
     fieldRawsMap: Record<string, ITinyField[]>,
-    tableRaws: ITinyTable[]
+    tableRaws: ITinyTable[],
+    allowedNodeIds?: Set<string>
   ) {
     const nodes: IGraphNode[] = [];
     const combos: IGraphCombo[] = [];
@@ -204,14 +82,17 @@ export class GraphService {
         label: tableName,
       });
       fieldRawsMap[tableId].forEach((field) => {
-        nodes.push({
-          id: field.id,
-          label: field.name,
-          comboId: tableId,
-          fieldType: field.type,
-          isLookup: field.isLookup,
-          isSelected: field.id === fieldId,
-        });
+        if (!allowedNodeIds || allowedNodeIds.has(field.id)) {
+          nodes.push({
+            id: field.id,
+            label: field.name,
+            comboId: tableId,
+            fieldType: field.type,
+            isLookup: field.isLookup,
+            isConditionalLookup: field.isConditionalLookup,
+            isSelected: field.id === fieldId,
+          });
+        }
       });
     });
     return {
@@ -240,7 +121,14 @@ export class GraphService {
     );
     const fieldRaws = await this.prismaService.field.findMany({
       where: { id: { in: allFieldIds } },
-      select: { id: true, name: true, type: true, isLookup: true, tableId: true },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        isLookup: true,
+        isConditionalLookup: true,
+        tableId: true,
+      },
     });
 
     fieldRaws.push({
@@ -248,6 +136,7 @@ export class GraphService {
       name: field.name,
       type: field.type,
       isLookup: field.isLookup || null,
+      isConditionalLookup: field.isConditionalLookup || null,
       tableId,
     });
 
@@ -261,23 +150,53 @@ export class GraphService {
 
     const fieldRawsMap = groupBy(fieldRaws, 'tableId');
 
-    const edges = directedGraph.map<IGraphEdge>((node) => {
-      const field = fieldMap[node.toFieldId];
+    // Normalize edges for display: dedupe and hide link -> lookup edge
+    const seen = new Set<string>();
+    const filteredGraph = directedGraph.filter(({ fromFieldId, toFieldId }) => {
+      // Hide the link -> lookup edge for readability in graph
+      const lookupOptions = field.lookupOptions;
+      if (
+        toFieldId === field.id &&
+        lookupOptions &&
+        isLinkLookupOptions(lookupOptions) &&
+        fromFieldId === lookupOptions.linkFieldId
+      ) {
+        return false;
+      }
+      const key = `${fromFieldId}->${toFieldId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const edges = filteredGraph.map<IGraphEdge>((node) => {
+      const f = fieldMap[node.toFieldId];
       return {
         source: node.fromFieldId,
         target: node.toFieldId,
-        label: field.isLookup ? 'lookup' : field.type,
+        label: f.isLookup ? 'lookup' : f.type,
       };
     }, []);
 
-    const { nodes, combos } = this.getFieldNodesAndCombos(field.id, fieldRawsMap, tableRaws);
+    // Only include nodes that appear in edges, plus the host field
+    const nodeIds = new Set<string>([field.id]);
+    for (const e of filteredGraph) {
+      nodeIds.add(e.fromFieldId);
+      nodeIds.add(e.toFieldId);
+    }
+    const { nodes, combos } = this.getFieldNodesAndCombos(
+      field.id,
+      fieldRawsMap,
+      tableRaws,
+      nodeIds
+    );
     const updateCellCount = await this.affectedCellCount(
       field.id,
       [field.id],
       { [field.id]: field },
       { [field.id]: tableMap[tableId].dbTableName }
     );
-
+    const estimateTime = field.isComputed ? this.getEstimateTime(updateCellCount) : 200;
     return {
       graph: {
         nodes,
@@ -285,15 +204,12 @@ export class GraphService {
         combos,
       },
       updateCellCount,
-      estimateTime: this.getEstimateTime(updateCellCount),
+      estimateTime,
     };
   }
 
   private async getField(tableId: string, fieldId: string, fieldRo: IConvertFieldRo) {
     const oldFieldVo = await this.fieldService.getField(tableId, fieldId);
-    if (!oldFieldVo) {
-      throw new BadRequestException(`Not found fieldId(${fieldId})`);
-    }
     const oldField = createFieldInstanceByVo(oldFieldVo);
     const newFieldVo = await this.fieldSupplementService.prepareUpdateField(
       tableId,
@@ -304,9 +220,67 @@ export class GraphService {
     return { oldField, newField };
   }
 
+  private async getFullTopoOrdersContext(field: IFieldInstance, directedGraph?: IGraphItem[]) {
+    const oldRefernce: string[] = [field.id];
+    const lookupGraph: IGraphItem[] = [];
+    const selfLookupReference = await this.prismaService.field.findMany({
+      where: {
+        lookupLinkedFieldId: field.id,
+        deletedTime: null,
+      },
+      select: { id: true },
+    });
+    oldRefernce.push(...selfLookupReference.map((f) => f.id));
+    lookupGraph.push(
+      ...selfLookupReference.map((f) => ({ fromFieldId: field.id, toFieldId: f.id }))
+    );
+
+    if (field.type === FieldType.Link && !field.isLookup && field.options.symmetricFieldId) {
+      const findSymmetricField = await this.prismaService.field.findUnique({
+        where: {
+          id: field.options.symmetricFieldId,
+          deletedTime: null,
+        },
+        select: { id: true },
+      });
+
+      if (findSymmetricField) {
+        const suplimentLookupRefernce = await this.prismaService.field.findMany({
+          where: {
+            lookupLinkedFieldId: field.options.symmetricFieldId,
+            deletedTime: null,
+          },
+          select: { id: true },
+        });
+        oldRefernce.push(
+          ...suplimentLookupRefernce.map((field) => field.id),
+          field.options.symmetricFieldId
+        );
+        lookupGraph.push(
+          ...suplimentLookupRefernce.map((f) => ({ fromFieldId: field.id, toFieldId: f.id }))
+        );
+        lookupGraph.push({ fromFieldId: field.id, toFieldId: field.options.symmetricFieldId });
+      }
+    }
+
+    const context = await this.fieldCalculationService.getTopoOrdersContext(
+      oldRefernce,
+      directedGraph
+    );
+    return {
+      ...context,
+      allFieldIds: uniq([...context.allFieldIds, ...lookupGraph.map((item) => item.toFieldId)]),
+      directedGraph: context.directedGraph.concat(lookupGraph),
+      fieldMap: {
+        ...context.fieldMap,
+      },
+    };
+  }
+
   @Timing()
   private async getUpdateCalculationContext(newField: IFieldInstance) {
     const fieldId = newField.id;
+
     const newReference = this.fieldSupplementService.getFieldReferenceIds(newField);
 
     const incomingGraph = await this.referenceService.getFieldGraphItems(newReference);
@@ -321,10 +295,7 @@ export class GraphService {
 
     const newDirectedGraph = pruneGraph(fieldId, tempGraph);
 
-    const context = await this.fieldCalculationService.getTopoOrdersContext(
-      [fieldId],
-      newDirectedGraph
-    );
+    const context = await this.getFullTopoOrdersContext(newField, newDirectedGraph);
     const fieldMap = {
       ...context.fieldMap,
       [newField.id]: newField,
@@ -347,7 +318,26 @@ export class GraphService {
     const { fieldId, directedGraph, allFieldIds, fieldMap, tableId2DbTableName, fieldId2TableId } =
       params;
 
-    const edges = directedGraph.map<IGraphEdge>((node) => {
+    // 1) Dedupe edges and hide link -> lookup edge for display
+    const edgeSeen = new Set<string>();
+    const filtered = directedGraph.filter(({ fromFieldId, toFieldId }) => {
+      const to = fieldMap[toFieldId];
+      const lookupOptions = to?.lookupOptions;
+      if (
+        lookupOptions &&
+        isLinkLookupOptions(lookupOptions) &&
+        fromFieldId === lookupOptions.linkFieldId
+      ) {
+        // Hide the link field as a dependency in the display graph
+        return false;
+      }
+      const key = `${fromFieldId}->${toFieldId}`;
+      if (edgeSeen.has(key)) return false;
+      edgeSeen.add(key);
+      return true;
+    });
+
+    const edges = filtered.map<IGraphEdge>((node) => {
       const field = fieldMap[node.toFieldId];
       return {
         source: node.fromFieldId,
@@ -367,7 +357,13 @@ export class GraphService {
       label: table.name,
     }));
 
-    const nodes = allFieldIds.map<IGraphNode>((id) => {
+    // Nodes: from filtered edges plus ensure host field is present
+    const nodeIdSet = new Set<string>([fieldId]);
+    for (const e of filtered) {
+      nodeIdSet.add(e.fromFieldId);
+      nodeIdSet.add(e.toFieldId);
+    }
+    const nodes = Array.from(nodeIdSet).map<IGraphNode>((id) => {
       const tableId = fieldId2TableId[id];
       const field = fieldMap[id];
       return {
@@ -427,10 +423,35 @@ export class GraphService {
       fieldId2DbTableName
     );
 
+    const resetLinkFieldLookupFieldIds =
+      await this.fieldConvertingLinkService.planResetLinkFieldLookupFieldId(
+        tableId,
+        newField,
+        'field|update'
+      );
+
     return {
       graph,
       updateCellCount,
       estimateTime: this.getEstimateTime(updateCellCount),
+      linkFieldCount: resetLinkFieldLookupFieldIds.length,
+    };
+  }
+
+  async planDeleteField(tableId: string, fieldId: string): Promise<IPlanFieldDeleteVo> {
+    const res = await this.planField(tableId, fieldId);
+    const field = await this.fieldService.getField(tableId, fieldId);
+    const fieldInstance = createFieldInstanceByVo(field);
+    const resetLinkFieldLookupFieldIds =
+      await this.fieldConvertingLinkService.planResetLinkFieldLookupFieldId(
+        tableId,
+        fieldInstance,
+        'field|delete'
+      );
+
+    return {
+      ...res,
+      linkFieldCount: resetLinkFieldLookupFieldIds.length,
     };
   }
 
@@ -440,36 +461,133 @@ export class GraphService {
     fieldMap: IFieldMap,
     fieldId2DbTableName: Record<string, string>
   ): Promise<number> {
-    const queries = fieldIds.map((fieldId) => {
-      const field = fieldMap[fieldId];
-      if (field.id !== hostFieldId && (field.lookupOptions || field.type === FieldType.Link)) {
-        const options = field.lookupOptions || (field.options as ILinkFieldOptions);
-        const { relationship, fkHostTableName, selfKeyName, foreignKeyName } = options;
-        const query =
-          relationship === Relationship.OneOne || relationship === Relationship.ManyOne
-            ? this.knex.count(foreignKeyName, { as: 'count' }).from(fkHostTableName)
-            : this.knex.countDistinct(selfKeyName, { as: 'count' }).from(fkHostTableName);
-
-        return query.toQuery();
-      } else {
-        const dbTableName = fieldId2DbTableName[fieldId];
-        return this.knex.count('*', { as: 'count' }).from(dbTableName).toQuery();
-      }
-    });
-    // console.log('queries', queries);
+    const queries = fieldIds
+      .map((fieldId) =>
+        this.buildAffectedCountQuery(hostFieldId, fieldId, fieldMap, fieldId2DbTableName)
+      )
+      .filter((query): query is IAffectedCountQuery => query != null);
 
     let total = 0;
-    for (const query of queries) {
-      const [{ count }] = await this.prismaService.$queryRawUnsafe<{ count: bigint }[]>(query);
-      // console.log('count', count);
-      total += Number(count);
+    for (const { fieldId, fieldName, query } of queries) {
+      try {
+        const [{ count }] = await this.prismaService.$queryRawUnsafe<{ count: bigint }[]>(query);
+        total += Number(count);
+      } catch (error) {
+        if (this.shouldSkipAffectedCountError(error)) {
+          this.logger.warn(
+            `Skip affected cell count for field=${fieldId} name="${fieldName}" due to broken storage: ${
+              error.meta?.message || error.message
+            }`
+          );
+          continue;
+        }
+        throw error;
+      }
     }
     return total;
   }
 
+  private buildAffectedCountQuery(
+    hostFieldId: string,
+    fieldId: string,
+    fieldMap: IFieldMap,
+    fieldId2DbTableName: Record<string, string>
+  ): IAffectedCountQuery | null {
+    const field = fieldMap[fieldId];
+
+    if (!field) {
+      this.logger.warn(`Skip affected cell count for missing field metadata: ${fieldId}`);
+      return null;
+    }
+
+    const lookupOptions = field.lookupOptions;
+
+    if (field.id !== hostFieldId) {
+      if (field.type === FieldType.Link) {
+        return this.buildLinkAffectedCountQuery(
+          field.id,
+          field.name,
+          field.options as ILinkFieldOptions
+        );
+      }
+
+      if (lookupOptions && isLinkLookupOptions(lookupOptions)) {
+        return this.buildLinkAffectedCountQuery(field.id, field.name, lookupOptions);
+      }
+    }
+
+    const dbTableName = fieldId2DbTableName[fieldId];
+    if (!dbTableName) {
+      this.logger.warn(
+        `Skip affected cell count for field=${fieldId} name="${field.name}" because db table name is missing`
+      );
+      return null;
+    }
+
+    return {
+      fieldId,
+      fieldName: field.name,
+      query: this.knex.count('*', { as: 'count' }).from(dbTableName).toQuery(),
+    };
+  }
+
+  private buildLinkAffectedCountQuery(
+    fieldId: string,
+    fieldName: string,
+    options: Pick<
+      ILinkFieldOptions,
+      'relationship' | 'fkHostTableName' | 'selfKeyName' | 'foreignKeyName'
+    >
+  ): IAffectedCountQuery | null {
+    const { relationship, fkHostTableName, selfKeyName, foreignKeyName } = options;
+
+    if (!fkHostTableName || !foreignKeyName) {
+      this.logger.warn(
+        `Skip affected cell count for field=${fieldId} name="${fieldName}" because link storage metadata is incomplete`
+      );
+      return null;
+    }
+
+    if (
+      relationship !== Relationship.OneOne &&
+      relationship !== Relationship.ManyOne &&
+      !selfKeyName
+    ) {
+      this.logger.warn(
+        `Skip affected cell count for field=${fieldId} name="${fieldName}" because link key metadata is incomplete`
+      );
+      return null;
+    }
+
+    const query =
+      relationship === Relationship.OneOne || relationship === Relationship.ManyOne
+        ? this.knex.count(foreignKeyName, { as: 'count' }).from(fkHostTableName)
+        : this.knex.countDistinct(selfKeyName as string, { as: 'count' }).from(fkHostTableName);
+
+    return {
+      fieldId,
+      fieldName,
+      query: query.toQuery(),
+    };
+  }
+
+  private shouldSkipAffectedCountError(
+    error: unknown
+  ): error is Prisma.PrismaClientKnownRequestError & {
+    meta?: { code?: string; message?: string };
+  } {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2010') {
+      return false;
+    }
+
+    const storageErrorCode = (error.meta as { code?: string } | undefined)?.code;
+    return storageErrorCode === '42703' || storageErrorCode === '42P01';
+  }
+
   @Timing()
   async planField(tableId: string, fieldId: string): Promise<IPlanFieldVo> {
-    const context = await this.fieldCalculationService.getTopoOrdersContext([fieldId]);
+    const field = await this.fieldService.getField(tableId, fieldId);
+    const context = await this.getFullTopoOrdersContext(createFieldInstanceByVo(field));
 
     const {
       directedGraph,
@@ -479,7 +597,6 @@ export class GraphService {
       tableId2DbTableName,
       fieldId2TableId,
     } = context;
-    const topoFieldIds = topoOrderWithStart(fieldId, directedGraph);
 
     const graph = await this.generateGraph({
       fieldId,
@@ -492,7 +609,7 @@ export class GraphService {
 
     const updateCellCount = await this.affectedCellCount(
       fieldId,
-      topoFieldIds,
+      allFieldIds,
       fieldMap,
       fieldId2DbTableName
     );
@@ -502,5 +619,297 @@ export class GraphService {
       updateCellCount,
       estimateTime: this.getEstimateTime(updateCellCount),
     };
+  }
+
+  async generateBaseErd(baseId: string) {
+    const tableRaws = await this.prismaService.tableMeta.findMany({
+      where: {
+        baseId,
+        deletedTime: null,
+      },
+      select: { id: true, name: true, icon: true },
+    });
+
+    const { tableMap, fieldMap, linkFieldRaws, tableNodes } = await this.getBaseErdContext(
+      tableRaws.map((table) => table.id)
+    );
+
+    const { references, referenceFieldRaws } = await this.getBaseErdReference(
+      Object.keys(fieldMap)
+    );
+
+    const {
+      tableNodes: crossTableNodes,
+      tableMap: crossTableTableMap,
+      fieldMap: crossTableFieldMap,
+      linkFieldRaws: crossBaseLinkFieldRaws,
+    } = await this.getBaseErdContext(
+      referenceFieldRaws.filter((field) => !tableMap[field.tableId]).map((field) => field.tableId),
+      true
+    );
+
+    const edges = await this.generateBaseErdEdges({
+      linkFieldRaws,
+      crossBaseLinkFieldRaws,
+      tableMap,
+      fieldMap,
+      crossBaseTableMap: crossTableTableMap,
+      crossBaseFieldMap: crossTableFieldMap,
+      references,
+    });
+
+    return {
+      baseId,
+      nodes: [...tableNodes, ...crossTableNodes],
+      edges,
+    };
+  }
+
+  private async getBaseErdContext(tableIds: string[], crossBase?: boolean) {
+    if (tableIds.length === 0) {
+      return {
+        tableRaws: [],
+        tableMap: {},
+        fieldRaws: [],
+        fieldMap: {},
+        linkFieldRaws: [],
+        tableNodes: [],
+      };
+    }
+    const tableRaws = await this.prismaService.tableMeta.findMany({
+      where: {
+        id: { in: tableIds },
+        deletedTime: null,
+      },
+      select: {
+        id: true,
+        name: true,
+        icon: true,
+        base: crossBase ? { select: { id: true, name: true } } : undefined,
+      },
+      orderBy: {
+        order: 'asc',
+      },
+    });
+    const tableMap = keyBy(tableRaws, 'id');
+
+    const fieldRaws = await this.prismaService.field.findMany({
+      where: {
+        tableId: { in: Object.keys(tableMap) },
+        deletedTime: null,
+      },
+      select: {
+        id: true,
+        tableId: true,
+        name: true,
+        type: true,
+        options: true,
+        isLookup: true,
+        lookupLinkedFieldId: true,
+      },
+      orderBy: {
+        order: 'asc',
+      },
+    });
+
+    const fieldMap = keyBy(fieldRaws, 'id');
+
+    const linkFieldRaws = fieldRaws
+      .filter((field) => field.type === FieldType.Link && !field.isLookup)
+      .map((field) => {
+        return {
+          ...field,
+          options: field.options && JSON.parse(field.options as string),
+        };
+      });
+
+    const tableId2fieldRaws = groupBy(fieldRaws, 'tableId');
+
+    const tableNodes = tableRaws.map<IBaseErdTableNode>((table) => {
+      const items = tableId2fieldRaws[table.id] ?? [];
+      return {
+        id: table.id,
+        name: table.name,
+        icon: table.icon ?? undefined,
+        crossBaseId: crossBase ? table.base.id : undefined,
+        crossBaseName: crossBase ? table.base.name : undefined,
+        fields: items.map((field) => ({
+          id: field.id,
+          name: field.name,
+          type: field.type as FieldType,
+          isLookup: field.isLookup ?? undefined,
+        })),
+      };
+    });
+
+    return {
+      tableRaws,
+      tableMap,
+      fieldRaws,
+      fieldMap,
+      linkFieldRaws,
+      tableNodes,
+    };
+  }
+
+  private async getBaseErdReference(allFieldIds: string[]) {
+    const references = await this.prismaService.txClient().reference.findMany({
+      where: {
+        OR: [{ fromFieldId: { in: allFieldIds } }, { toFieldId: { in: allFieldIds } }],
+      },
+      select: {
+        fromFieldId: true,
+        toFieldId: true,
+      },
+    });
+
+    const referenceFieldIds = uniq(
+      references.map((ref) => [ref.fromFieldId, ref.toFieldId]).flat()
+    );
+
+    const referenceFieldRaws = await this.prismaService.txClient().field.findMany({
+      where: {
+        id: { in: referenceFieldIds },
+      },
+      select: {
+        id: true,
+        tableId: true,
+      },
+    });
+
+    return {
+      references,
+      referenceFieldRaws,
+    };
+  }
+
+  /**
+   * if A -> B & B -> A, keep A <-> B
+   */
+  // eslint-disable-next-line sonarjs/cognitive-complexity
+  private async generateBaseErdEdges(params: {
+    linkFieldRaws: (Pick<Field, 'id' | 'name' | 'type' | 'tableId'> & {
+      options: ILinkFieldOptions;
+    })[];
+    tableMap: Record<string, Pick<TableMeta, 'id' | 'name' | 'icon'>>;
+    fieldMap: Record<
+      string,
+      Pick<Field, 'id' | 'tableId' | 'name' | 'type' | 'isLookup' | 'lookupLinkedFieldId'>
+    >;
+    crossBaseLinkFieldRaws: (Pick<Field, 'id' | 'name' | 'type' | 'tableId'> & {
+      options: ILinkFieldOptions;
+    })[];
+    crossBaseTableMap: Record<string, Pick<TableMeta, 'id' | 'name' | 'icon'>>;
+    crossBaseFieldMap: Record<
+      string,
+      Pick<Field, 'id' | 'tableId' | 'name' | 'type' | 'isLookup' | 'lookupLinkedFieldId'>
+    >;
+    references: { fromFieldId: string; toFieldId: string }[];
+  }) {
+    const {
+      linkFieldRaws,
+      tableMap,
+      fieldMap,
+      crossBaseLinkFieldRaws,
+      crossBaseTableMap,
+      crossBaseFieldMap,
+      references,
+    } = params;
+
+    const fieldEdgeMap = new Map<string, boolean>();
+    const edges: IBaseErdEdge[] = [];
+    for (const field of [...linkFieldRaws, ...crossBaseLinkFieldRaws]) {
+      const { options } = field;
+      const sourceTable =
+        tableMap[options.foreignTableId] ?? crossBaseTableMap[options.foreignTableId];
+      const sourceFieldId = options.symmetricFieldId ?? options.lookupFieldId;
+      const sourceField = fieldMap[sourceFieldId] ?? crossBaseFieldMap[sourceFieldId];
+
+      const targetTable = tableMap[field.tableId] ?? crossBaseTableMap[field.tableId];
+      const targetField = fieldMap[field.id] ?? crossBaseFieldMap[field.id];
+
+      if (!sourceTable || !targetTable || !sourceField || !targetField) {
+        continue;
+      }
+
+      const edge: IBaseErdEdge = {
+        source: {
+          tableId: sourceTable.id,
+          tableName: sourceTable.name,
+          fieldId: sourceField.id,
+          fieldName: sourceField.name,
+        },
+        target: {
+          tableId: targetTable.id,
+          tableName: targetTable.name,
+          fieldId: targetField.id,
+          fieldName: targetField.name,
+        },
+        relationship: options.relationship,
+        isOneWay: options.isOneWay ?? false,
+        type: field.type as FieldType,
+      };
+      const key = `${sourceField.id}-${targetField.id}`;
+      const reverseKey = `${targetField.id}-${sourceField.id}`;
+      if (fieldEdgeMap.has(reverseKey)) {
+        fieldEdgeMap.set(key, true);
+        continue;
+      }
+      fieldEdgeMap.set(key, false);
+      edges.push(edge);
+    }
+
+    for (const { fromFieldId, toFieldId } of references) {
+      const fromField = fieldMap[fromFieldId] ?? crossBaseFieldMap[fromFieldId];
+      const toField = fieldMap[toFieldId] ?? crossBaseFieldMap[toFieldId];
+
+      if (!fromField || !toField) {
+        continue;
+      }
+
+      const fromTable = tableMap[fromField.tableId] ?? crossBaseTableMap[fromField.tableId];
+      const toTable = tableMap[toField.tableId] ?? crossBaseTableMap[toField.tableId];
+
+      if (!fromTable || !toTable) {
+        continue;
+      }
+
+      const key = `${fromField.id}-${toField.id}`;
+      const reverseKey = `${toField.id}-${fromField.id}`;
+      if (fieldEdgeMap.has(key) || fieldEdgeMap.has(reverseKey)) {
+        continue;
+      }
+
+      if (toField.lookupLinkedFieldId && toField.lookupLinkedFieldId === fromField.id) {
+        continue;
+      }
+
+      const edge: IBaseErdEdge = {
+        source: {
+          tableId: fromTable.id,
+          tableName: fromTable.name,
+          fieldId: fromField.id,
+          fieldName: fromField.name,
+        },
+        target: {
+          tableId: toTable.id,
+          tableName: toTable.name,
+          fieldId: toField.id,
+          fieldName: toField.name,
+        },
+        type: toField.isLookup ? 'lookup' : (toField.type as FieldType),
+      };
+      edges.push(edge);
+      fieldEdgeMap.set(key, true);
+    }
+
+    return edges.map((edge) => {
+      const key = `${edge.source.fieldId}-${edge.target.fieldId}`;
+      const guessOneWay = fieldEdgeMap.get(key) ?? true;
+      return {
+        ...edge,
+        isOneWay: edge.isOneWay ?? guessOneWay,
+      };
+    });
   }
 }

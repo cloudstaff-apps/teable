@@ -2,12 +2,13 @@ import { Loader2 } from '@teable/icons';
 import { LocalStorageKeys } from '@teable/sdk/config';
 import { useFields, useTableId, useView } from '@teable/sdk/hooks';
 import { type FormView } from '@teable/sdk/model';
-import { Button, cn, useToast } from '@teable/ui-lib/shadcn';
+import { Button, cn } from '@teable/ui-lib/shadcn';
+import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { omit } from 'lodash';
-import Image from 'next/image';
 import { useTranslation } from 'next-i18next';
 import { useMemo, useState } from 'react';
 import { useLocalStorage, useMap, useSet } from 'react-use';
+import { usePreviewUrl } from '@/features/app/hooks/usePreviewUrl';
 import { tableConfig } from '@/features/i18n/table.config';
 import { generateUniqLocalKey } from '../util';
 import { FormField } from './FormField';
@@ -22,7 +23,6 @@ export const FormBody = (props: IFormBodyProps) => {
   const tableId = useTableId();
   const view = useView() as FormView | undefined;
   const fields = useFields();
-  const { toast } = useToast();
   const { t } = useTranslation(tableConfig.i18nNamespaces);
   const localKey = generateUniqLocalKey(tableId, view?.id);
   const [formDataMap, setFormDataMap] = useLocalStorage<Record<string, Record<string, unknown>>>(
@@ -36,6 +36,7 @@ export const FormBody = (props: IFormBodyProps) => {
     new Set([])
   );
   const [loading, setLoading] = useState(false);
+  const previewUrl = usePreviewUrl();
 
   const visibleFields = useMemo(
     () => fields.filter(({ isComputed, isLookup }) => !isComputed && !isLookup),
@@ -76,7 +77,7 @@ export const FormBody = (props: IFormBodyProps) => {
     resetErrors();
 
     const requiredFieldIds = visibleFields.reduce((acc, field) => {
-      if (columnMeta[field.id].required) acc.push(field.id);
+      if (field.notNull || columnMeta[field.id].required) acc.push(field.id);
       return acc;
     }, [] as string[]);
 
@@ -109,17 +110,19 @@ export const FormBody = (props: IFormBodyProps) => {
 
     setLoading(true);
     if (submit) {
-      await submit(formData);
+      const finalData = visibleFields.reduce(
+        (acc, field) => {
+          acc[field.id] = formData[field.id];
+          return acc;
+        },
+        {} as Record<string, unknown>
+      );
+      await submit(finalData);
+      setTimeout(() => {
+        onReset();
+        toast.success(t('actions.submitSucceed'));
+      }, 1000);
     }
-
-    setTimeout(() => {
-      onReset();
-      toast({
-        title: t('actions.submitSucceed'),
-        variant: 'default',
-        duration: 2000,
-      });
-    }, 1000);
   };
 
   const { coverUrl, logoUrl, submitLabel } = view?.options ?? {};
@@ -134,26 +137,20 @@ export const FormBody = (props: IFormBodyProps) => {
         )}
       >
         {coverUrl && (
-          <Image
-            src={coverUrl}
+          <img
+            src={previewUrl(coverUrl)}
             alt="card cover"
-            fill
-            sizes="100%"
-            style={{
-              objectFit: 'cover',
-            }}
+            className="absolute inset-0 size-full object-cover"
           />
         )}
       </div>
 
       {logoUrl && (
         <div className="group absolute left-1/2 top-[104px] ml-[-40px] size-20">
-          <Image
-            className="rounded-lg object-cover shadow-sm"
-            src={logoUrl}
+          <img
+            className="absolute inset-0 size-full rounded-lg object-cover shadow-sm"
+            src={previewUrl(logoUrl)}
             alt="card cover"
-            fill
-            sizes="100%"
           />
         </div>
       )}
@@ -168,7 +165,7 @@ export const FormBody = (props: IFormBodyProps) => {
         {name ?? t('untitled')}
       </div>
 
-      {description && <div className="mb-4 w-full px-12">{description}</div>}
+      {description && <div className="mb-4 w-full whitespace-pre-line px-12">{description}</div>}
 
       {Boolean(visibleFields.length) && (
         <div className="w-full px-6 sm:px-12">
@@ -190,7 +187,7 @@ export const FormBody = (props: IFormBodyProps) => {
               className="w-full text-base sm:w-56"
               size={'lg'}
               onClick={onSubmit}
-              disabled={loading}
+              disabled={loading || !submit}
             >
               {loading && <Loader2 className="size-4 animate-spin" />}
               {submitLabel || t('common:actions.submit')}

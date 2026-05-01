@@ -1,17 +1,41 @@
-import { type IGridViewOptions } from '@teable/core';
-import { ArrowUpDown, EyeOff, Filter as FilterIcon, LayoutList } from '@teable/icons';
+import type { RowHeightLevel, IGridViewOptions } from '@teable/core';
+import {
+  ArrowUpDown,
+  EyeOff,
+  Filter as FilterIcon,
+  LayoutList,
+  AlertTriangle,
+} from '@teable/icons';
 import { useView, RowHeight, Group, HideFields } from '@teable/sdk';
 import { cn } from '@teable/ui-lib/shadcn';
+import { useEffect, useRef } from 'react';
 import { useToolbarChange } from '@/features/app/blocks/view/hooks/useToolbarChange';
 import { SearchButton } from '@/features/app/blocks/view/search/SearchButton';
+import { useToolBarStore } from '@/features/app/blocks/view/tool-bar/components/useToolBarStore';
 import { ToolBarButton } from '@/features/app/blocks/view/tool-bar/ToolBarButton';
 import { ShareViewFilter } from '../../share-view-filter';
 import { Sort } from './Sort';
 
 export const Toolbar = () => {
   const view = useView();
+  const { setFilterRef, setSortRef, setGroupRef } = useToolBarStore();
+  const filterRef = useRef<HTMLButtonElement>(null);
+  const sortRef = useRef<HTMLButtonElement>(null);
+  const groupRef = useRef<HTMLButtonElement>(null);
 
-  const { onFilterChange, onRowHeightChange, onSortChange, onGroupChange } = useToolbarChange();
+  useEffect(() => {
+    setFilterRef(filterRef);
+    setSortRef(sortRef);
+    setGroupRef(groupRef);
+  }, [setFilterRef, setGroupRef, setSortRef]);
+
+  const {
+    onFilterChange,
+    onRowHeightChange,
+    onSortChange,
+    onGroupChange,
+    onFieldNameDisplayLinesChange,
+  } = useToolbarChange();
 
   if (!view) {
     return <></>;
@@ -27,18 +51,23 @@ export const Toolbar = () => {
         )}
       </HideFields>
       <ShareViewFilter filters={view?.filter || null} onChange={onFilterChange}>
-        {(text, isActive) => (
+        {(text, isActive, hasWarning) => (
           <ToolBarButton
             isActive={isActive}
             text={text}
+            ref={filterRef}
             className={cn(
               'max-w-xs',
               isActive &&
-                'bg-violet-100 dark:bg-violet-600/30 hover:bg-violet-200 dark:hover:bg-violet-500/30'
+                'bg-violet-100 dark:bg-violet-600/30 hover:bg-violet-200 dark:hover:bg-violet-500/30',
+              hasWarning && 'border-yellow-500'
             )}
             textClassName="@2xl/toolbar:inline"
           >
-            <FilterIcon className="size-4 text-sm" />
+            <>
+              <FilterIcon className="size-4 text-sm" />
+              {hasWarning && <AlertTriangle className="size-3.5 text-yellow-500" />}
+            </>
           </ToolBarButton>
         )}
       </ShareViewFilter>
@@ -47,6 +76,7 @@ export const Toolbar = () => {
           <ToolBarButton
             isActive={isActive}
             text={text}
+            ref={sortRef}
             className={cn(
               'max-w-xs',
               isActive &&
@@ -63,6 +93,7 @@ export const Toolbar = () => {
           <ToolBarButton
             isActive={isActive}
             text={text}
+            ref={groupRef}
             className={cn(
               'max-w-xs',
               isActive &&
@@ -75,8 +106,12 @@ export const Toolbar = () => {
         )}
       </Group>
       <RowHeight
-        rowHeight={(view?.options as IGridViewOptions)?.rowHeight || null}
-        onChange={onRowHeightChange}
+        rowHeight={(view?.options as IGridViewOptions)?.rowHeight}
+        fieldNameDisplayLines={(view?.options as IGridViewOptions)?.fieldNameDisplayLines}
+        onChange={(type, value) => {
+          if (type === 'rowHeight') onRowHeightChange(value as RowHeightLevel);
+          if (type === 'fieldNameDisplayLines') onFieldNameDisplayLinesChange(value as number);
+        }}
       >
         {(_, isActive, Icon) => (
           <ToolBarButton isActive={isActive}>
@@ -85,7 +120,7 @@ export const Toolbar = () => {
         )}
       </RowHeight>
       <div className="flex w-10 flex-1 justify-end">
-        <SearchButton />
+        <SearchButton shareView />
       </div>
     </div>
   );

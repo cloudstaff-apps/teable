@@ -2,6 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import { X, ChevronRight, Download } from '@teable/icons';
 import { useContext, useMemo } from 'react';
+import { useIsMobile } from '../../../hooks/use-is-mobile';
 import { Dialog, DialogContent, DialogTrigger, cn } from '../../../shadcn';
 import { FilePreview } from './FilePreview';
 import { FilePreviewContext } from './FilePreviewContext';
@@ -11,6 +12,7 @@ export const FilePreviewContent = (props: { container?: HTMLElement | null }) =>
   const { container } = props;
   const { files, currentFile, openPreview, closePreview, onPrev, onNext } =
     useContext(FilePreviewContext);
+  const isMobile = useIsMobile();
   const { name, fileId, src } = currentFile || {};
   const open = Boolean(fileId);
 
@@ -31,7 +33,7 @@ export const FilePreviewContent = (props: { container?: HTMLElement | null }) =>
     if (!name || !src) return;
     const downloadLink = document.createElement('a');
     downloadLink.href = src || '';
-    downloadLink.target = '_blank';
+    downloadLink.target = isMobile ? '_self' : '_blank';
     downloadLink.download = name;
     downloadLink.click();
   };
@@ -46,9 +48,18 @@ export const FilePreviewContent = (props: { container?: HTMLElement | null }) =>
         onMouseDown={(e) => {
           e.stopPropagation();
         }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             closePreview();
+          }
+          if (e.key === 'ArrowRight') {
+            onNext();
+          }
+          if (e.key === 'ArrowLeft') {
+            onPrev();
           }
           e.stopPropagation();
         }}

@@ -25,7 +25,9 @@ export const useViewFilterLinkContext = (
     if (enabledQuery) {
       tableId &&
         viewId &&
-        queryClient.invalidateQueries(ReactQueryKeys.getViewFilterLinkRecords(tableId, viewId));
+        queryClient.invalidateQueries({
+          queryKey: ReactQueryKeys.getViewFilterLinkRecords(tableId, viewId),
+        });
     }
   }, [enabledQuery, queryClient, tableId, viewId]);
 
@@ -33,7 +35,8 @@ export const useViewFilterLinkContext = (
   useViewListener(viewId, viewMatches, updateContext);
 
   return {
-    isLoading,
+    // Only show loading when query is enabled and actually loading
+    isLoading: enabledQuery && isLoading,
     data: queryData?.map((v) => ({
       tableId: v.tableId,
       data: v.records.reduce(

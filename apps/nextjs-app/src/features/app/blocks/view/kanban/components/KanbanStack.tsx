@@ -1,20 +1,19 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 import { Draggable, Droppable } from '@hello-pangea/dnd';
 import type { IFilter } from '@teable/core';
-import { and, isEmpty, is, FieldType, mergeFilter } from '@teable/core';
-import type { ISelectChoice } from '@teable/sdk/components';
+import { and, mergeFilter } from '@teable/core';
 import { useRecords } from '@teable/sdk/hooks';
 import type { Record } from '@teable/sdk/model';
-import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useTranslation } from 'next-i18next';
+import { forwardRef, useEffect, useMemo, useState } from 'react';
 import { useMeasure } from 'react-use';
 import type { ListRange, VirtuosoHandle } from 'react-virtuoso';
 import { Virtuoso } from 'react-virtuoso';
 import { tableConfig } from '@/features/i18n/table.config';
-import { UNCATEGORIZED_STACK_ID } from '../constant';
 import type { IKanbanContext } from '../context';
 import { useKanban } from '../hooks';
 import type { IStackData } from '../type';
+import { getFilterSet } from '../utils';
 import type { ICardMap } from './interface';
 import { KanbanCard } from './KanbanCard';
 
@@ -57,37 +56,32 @@ export const KanbanStack = forwardRef<VirtuosoHandle, IKanbanStackProps>((props,
   const { t } = useTranslation(tableConfig.i18nNamespaces);
   const { stackField, permission, recordQuery } = useKanban() as Required<IKanbanContext>;
   const [skipIndex, setSkipIndex] = useState(0);
-  const skipIndexRef = useRef(skipIndex);
   const [ref, { height }] = useMeasure<HTMLDivElement>();
 
   const cardCount = cards.length;
   const { cardDraggable } = permission;
-  const { id: fieldId, type: fieldType } = stackField;
-  const { id: stackId, data: stackData, count: stackCount } = stack;
-  const isUncategorized = stackId === UNCATEGORIZED_STACK_ID;
-  const filterValue = fieldType === FieldType.User ? stackId : (stackData as ISelectChoice).name;
+  const { isComputed } = stackField;
+  const { id: stackId, count: stackCount } = stack;
+
+  const mergedFilter = useMemo(() => {
+    const outerFilter = recordQuery?.filter;
+    const filterSet = getFilterSet(stackField, stack);
+    return mergeFilter(outerFilter, {
+      conjunction: and.value,
+      filterSet,
+    }) as IFilter;
+  }, [recordQuery?.filter, stack, stackField]);
 
   const query = useMemo(() => {
-    const outerFilter = recordQuery?.filter;
-
     return {
       ...recordQuery,
       skip: skipIndex,
       take: TAKE_COUNT,
-      filter: mergeFilter(outerFilter, {
-        conjunction: and.value,
-        filterSet: [
-          {
-            fieldId,
-            operator: isUncategorized ? isEmpty.value : is.value,
-            value: (isUncategorized ? null : filterValue) as string | null,
-          },
-        ],
-      }) as IFilter,
+      filter: mergedFilter,
     };
-  }, [fieldId, isUncategorized, skipIndex, filterValue, recordQuery]);
+  }, [recordQuery, skipIndex, mergedFilter]);
 
-  const records = useRecords(query);
+  const { records } = useRecords(query);
 
   const sortedRecords = useMemo(() => {
     return records.filter(Boolean);
@@ -103,7 +97,6 @@ export const KanbanStack = forwardRef<VirtuosoHandle, IKanbanStackProps>((props,
     const willSkipIndex = Math.max(0, Math.floor(startIndex / LOAD_COUNT) * LOAD_COUNT);
     if (willSkipIndex !== skipIndex) {
       setSkipIndex(willSkipIndex);
-      skipIndexRef.current = willSkipIndex;
     }
   };
 
@@ -134,7 +127,7 @@ export const KanbanStack = forwardRef<VirtuosoHandle, IKanbanStackProps>((props,
             components={{
               Item: HeightPreservingItem as never,
               EmptyPlaceholder: () => (
-                <div className="flex size-full items-center justify-center text-slate-500">
+                <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
                   {t('table:kanban.stack.noCards')}
                 </div>
               ),
@@ -152,7 +145,7 @@ export const KanbanStack = forwardRef<VirtuosoHandle, IKanbanStackProps>((props,
                   draggableId={card.id}
                   index={realIndex}
                   key={card.id}
-                  isDragDisabled={!cardDraggable}
+                  isDragDisabled={!cardDraggable || isComputed}
                 >
                   {(provided) => <KanbanCard provided={provided} card={card} stack={stack} />}
                 </Draggable>

@@ -14,6 +14,7 @@ export enum FormulaFuncType {
 
 export interface IFormulaContext {
   record: IRecord;
+  timeZone: string;
   dependencies: { [fieldId: string]: FieldCore };
 }
 
@@ -87,6 +88,8 @@ export enum FunctionName {
   Replace = 'REPLACE',
   RegExpReplace = 'REGEXP_REPLACE',
   Substitute = 'SUBSTITUTE',
+  TextBefore = 'TEXTBEFORE',
+  TextSplit = 'TEXTSPLIT',
   Lower = 'LOWER',
   Upper = 'UPPER',
   Rept = 'REPT',

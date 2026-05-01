@@ -8,6 +8,7 @@ import {
 import { cn } from '@teable/ui-lib/shadcn';
 import { useState, useEffect } from 'react';
 import { TableListItem } from './TableListItem';
+import { useTableHref } from './useTableHref';
 
 export const DraggableList = () => {
   const tables = useTables();
@@ -17,6 +18,8 @@ export const DraggableList = () => {
   const isHydrated = useIsHydrated();
 
   const [innerTables, setInnerTables] = useState([...tables]);
+
+  const { hrefMap: tableHrefMap } = useTableHref();
 
   useEffect(() => {
     setInnerTables(tables);
@@ -33,10 +36,8 @@ export const DraggableList = () => {
 
     const list = [...tables];
     const [table] = list.splice(from, 1);
-
     list.splice(to, 0, table);
     setInnerTables(list);
-
     const tableIndex = list.findIndex((v) => v.id === table.id);
     if (tableIndex == 0) {
       await table.updateOrder({ anchorId: list[1].id, position: 'before' });
@@ -61,6 +62,7 @@ export const DraggableList = () => {
                 })}
               >
                 <TableListItem
+                  href={tableHrefMap[table.id]}
                   table={table}
                   isActive={table.id === tableId}
                   isDragging={isDragging}

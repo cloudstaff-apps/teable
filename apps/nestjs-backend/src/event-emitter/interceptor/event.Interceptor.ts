@@ -9,7 +9,15 @@ import { match, P } from 'ts-pattern';
 import { EMIT_EVENT_NAME } from '../decorators/emit-controller-event.decorator';
 import { EventEmitterService } from '../event-emitter.service';
 import type { IEventContext } from '../events';
-import { Events, BaseEventFactory, SpaceEventFactory } from '../events';
+import {
+  Events,
+  BaseEventFactory,
+  SpaceEventFactory,
+  DashboardEventFactory,
+  AppEventFactory,
+  WorkflowEventFactory,
+} from '../events';
+import { BaseNodeEventFactory } from '../events/base/base-node.event';
 
 @Injectable()
 export class EventMiddleware implements NestInterceptor {
@@ -27,7 +35,9 @@ export class EventMiddleware implements NestInterceptor {
         const interceptContext = this.interceptContext(req, data);
 
         const event = this.createEvent(emitEventName, interceptContext);
-        event && this.eventEmitterService.emitAsync(event.name, event);
+        event
+          ? this.eventEmitterService.emitAsync(event.name, event)
+          : this.eventEmitterService.emitAsync(emitEventName, interceptContext);
       })
     );
   }
@@ -55,18 +65,61 @@ export class EventMiddleware implements NestInterceptor {
     };
 
     return match(eventName)
-      .with(
-        P.union(
-          Events.BASE_CREATE,
-          Events.BASE_DELETE,
-          Events.BASE_UPDATE,
-          Events.BASE_PERMISSION_UPDATE
-        ),
-        () => BaseEventFactory.create(eventName, { base: resolveData, ...reqParams }, eventContext)
+      .with(Events.BASE_DELETE, () =>
+        BaseEventFactory.create(eventName, { ...resolveData, ...reqParams }, eventContext)
       )
-      .with(P.union(Events.SPACE_CREATE, Events.SPACE_DELETE, Events.SPACE_UPDATE), () =>
+      .with(P.union(Events.BASE_CREATE, Events.BASE_UPDATE, Events.BASE_PERMISSION_UPDATE), () =>
+        BaseEventFactory.create(eventName, { base: resolveData, ...reqParams }, eventContext)
+      )
+      .with(Events.SPACE_DELETE, () =>
+        SpaceEventFactory.create(eventName, { ...resolveData, ...reqParams }, eventContext)
+      )
+      .with(P.union(Events.SPACE_CREATE, Events.SPACE_UPDATE), () =>
         SpaceEventFactory.create(eventName, { space: resolveData, ...reqParams }, eventContext)
       )
+      .with(Events.WORKFLOW_DELETE, () =>
+        WorkflowEventFactory.create(eventName, { ...resolveData, ...reqParams }, eventContext)
+      )
+      .with(P.union(Events.WORKFLOW_CREATE, Events.WORKFLOW_UPDATE), () =>
+        WorkflowEventFactory.create(
+          eventName,
+          { baseId: reqParams.baseId, workflow: resolveData, ...reqParams },
+          eventContext
+        )
+      )
+      .with(Events.APP_DELETE, () =>
+        AppEventFactory.create(eventName, { ...resolveData, ...reqParams }, eventContext)
+      )
+      .with(P.union(Events.APP_CREATE, Events.APP_UPDATE), () =>
+        AppEventFactory.create(
+          eventName,
+          { baseId: reqParams.baseId, app: resolveData, ...reqParams },
+          eventContext
+        )
+      )
+      .with(Events.DASHBOARD_DELETE, () =>
+        DashboardEventFactory.create(eventName, { ...resolveData, ...reqParams }, eventContext)
+      )
+      .with(P.union(Events.DASHBOARD_CREATE, Events.DASHBOARD_UPDATE), () =>
+        DashboardEventFactory.create(
+          eventName,
+          { baseId: reqParams.baseId, dashboard: resolveData, ...reqParams },
+          eventContext
+        )
+      )
+
+      .with(
+        P.union(Events.BASE_NODE_CREATE, Events.BASE_NODE_UPDATE, Events.BASE_NODE_DELETE),
+        () => {
+          const { baseId } = reqParams;
+          return BaseNodeEventFactory.create(
+            eventName,
+            { baseId, node: resolveData },
+            eventContext
+          );
+        }
+      )
+
       .otherwise(() => null);
   }
 }

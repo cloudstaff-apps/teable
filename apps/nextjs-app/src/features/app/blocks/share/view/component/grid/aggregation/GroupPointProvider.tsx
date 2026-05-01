@@ -9,17 +9,17 @@ import {
   useSearch,
   useTableListener,
   useViewListener,
+  ShareViewContext,
 } from '@teable/sdk';
 import type { ReactNode } from 'react';
 import { useCallback, useContext, useMemo } from 'react';
-import { ShareViewPageContext } from '../../../ShareViewPageContext';
 
 interface GroupPointProviderProps {
   children: ReactNode;
 }
 
 export const GroupPointProvider = ({ children }: GroupPointProviderProps) => {
-  const { tableId, viewId, shareId } = useContext(ShareViewPageContext);
+  const { tableId, viewId, shareId } = useContext(ShareViewContext);
   const queryClient = useQueryClient();
   const view = useView(viewId);
   const { searchQuery } = useSearch();
@@ -53,7 +53,10 @@ export const GroupPointProvider = ({ children }: GroupPointProviderProps) => {
   });
 
   const updateGroupPoints = useCallback(
-    () => queryClient.invalidateQueries(ReactQueryKeys.shareViewGroupPoints(shareId, query)),
+    () =>
+      queryClient.invalidateQueries({
+        queryKey: ReactQueryKeys.shareViewGroupPoints(shareId, query),
+      }),
     [query, queryClient, shareId]
   );
 

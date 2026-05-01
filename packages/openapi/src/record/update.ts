@@ -1,8 +1,8 @@
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import type { IRecord } from '@teable/core';
 import { recordSchema } from '@teable/core';
-import type { AxiosResponse, Axios } from 'axios';
-import { axios as axiosInstance } from '../axios';
+import type { AxiosResponse } from 'axios';
+import { axios } from '../axios';
 import { registerRoute, urlBuilder } from '../utils';
 import { z } from '../zod';
 import { recordInsertOrderRoSchema } from './create';
@@ -17,7 +17,7 @@ export const updateRecordRoSchema = z
     }),
     order: recordInsertOrderRoSchema.optional(),
   })
-  .openapi({
+  .meta({
     description: 'Update record by id',
   });
 
@@ -35,7 +35,7 @@ export const updateRecordsRoSchema = z
     ),
     order: recordInsertOrderRoSchema.optional(),
   })
-  .openapi({
+  .meta({
     description: 'Multiple Update records',
   });
 
@@ -46,7 +46,9 @@ export const UPDATE_RECORD = '/table/{tableId}/record/{recordId}';
 export const UpdateRecordRoute: RouteConfig = registerRoute({
   method: 'patch',
   path: UPDATE_RECORD,
-  description: 'Update a record',
+  summary: 'Update record',
+  description:
+    'Update a single record by its ID with support for field value typecast and record reordering.',
   request: {
     params: z.object({
       tableId: z.string(),
@@ -77,38 +79,6 @@ export async function updateRecord(
   tableId: string,
   recordId: string,
   recordRo: IUpdateRecordRo
-): Promise<AxiosResponse<IRecord>>;
-export async function updateRecord(
-  axios: Axios,
-  tableId: string,
-  recordId: string,
-  recordRo: IUpdateRecordRo
-): Promise<AxiosResponse<IRecord>>;
-export async function updateRecord(
-  axios: Axios | string,
-  tableId?: string,
-  recordId?: string | IUpdateRecordRo,
-  recordRo?: IUpdateRecordRo
 ): Promise<AxiosResponse<IRecord>> {
-  let theAxios: Axios;
-  let theTableId: string;
-  let theRecordId: string;
-  let theRecordRo: IUpdateRecordRo;
-
-  if (typeof axios === 'string') {
-    theAxios = axiosInstance;
-    theTableId = axios;
-    theRecordId = tableId as string;
-    theRecordRo = recordId as IUpdateRecordRo;
-  } else {
-    theAxios = axios;
-    theTableId = tableId as string;
-    theRecordId = recordId as string;
-    theRecordRo = recordRo!;
-  }
-
-  return theAxios.patch<IRecord>(
-    urlBuilder(UPDATE_RECORD, { tableId: theTableId, recordId: theRecordId }),
-    theRecordRo
-  );
+  return axios.patch<IRecord>(urlBuilder(UPDATE_RECORD, { tableId, recordId }), recordRo);
 }

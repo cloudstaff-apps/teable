@@ -1,38 +1,62 @@
 import { useQuery } from '@tanstack/react-query';
-import type { IGetBaseVo } from '@teable/openapi';
-import { getBaseById, getBasePermission } from '@teable/openapi';
+import {
+  getBaseById,
+  getBasePermission,
+  LastVisitResourceType,
+  updateUserLastVisit,
+} from '@teable/openapi';
 import type { FC, ReactNode } from 'react';
-import { useContext, useMemo } from 'react';
+import { useContext, useEffect, useMemo } from 'react';
+import { ReactQueryKeys } from '../../config';
+import { useIsReadOnlyPreview } from '../../hooks/use-is-readonly-preview';
 import { Base } from '../../model';
 import { AnchorContext } from '../anchor';
 import { BaseContext } from './BaseContext';
-
 interface IBaseProviderProps {
-  serverData?: IGetBaseVo;
   children: ReactNode;
+  fallback?: React.ReactNode;
 }
 
-export const BaseProvider: FC<IBaseProviderProps> = ({ children, serverData }) => {
+export const BaseProvider: FC<IBaseProviderProps> = ({ children, fallback }) => {
   const { baseId } = useContext(AnchorContext);
-  const { data: baseData, isLoading } = useQuery({
-    queryKey: ['base', baseId],
+  const isReadOnlyPreview = useIsReadOnlyPreview();
+  const { data: baseData } = useQuery({
+    queryKey: ReactQueryKeys.base(baseId as string),
     queryFn: ({ queryKey }) =>
       queryKey[1] ? getBaseById(queryKey[1]).then((res) => res.data) : undefined,
   });
 
+  useEffect(() => {
+    // Skip last visit tracking in template or share mode
+    if (isReadOnlyPreview) {
+      return;
+    }
+    if (baseData) {
+      updateUserLastVisit({
+        resourceId: baseData.id,
+        resourceType: LastVisitResourceType.Base,
+        parentResourceId: baseData.spaceId,
+      });
+    }
+  }, [baseData, isReadOnlyPreview]);
+
   const { data: basePermissionData } = useQuery({
-    queryKey: ['basePermission', baseId],
+    queryKey: ReactQueryKeys.getBasePermission(baseId as string),
     queryFn: ({ queryKey }) =>
       queryKey[1] ? getBasePermission(queryKey[1]).then((res) => res.data) : undefined,
   });
 
   const value = useMemo(() => {
-    const base = isLoading ? serverData : baseData;
+    const base = baseData;
     return {
       base: base ? new Base(base) : undefined,
       permission: basePermissionData,
     };
-  }, [isLoading, serverData, baseData, basePermissionData]);
+  }, [baseData, basePermissionData]);
+
+  if (!value.base) {
+    return <>{fallback}</>;
+  }
 
   return <BaseContext.Provider value={value}>{children}</BaseContext.Provider>;
 };

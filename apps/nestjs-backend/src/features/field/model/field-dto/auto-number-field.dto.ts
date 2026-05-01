@@ -1,4 +1,5 @@
 import { AutoNumberFieldCore } from '@teable/core';
+import type { IFormulaFieldMeta } from '@teable/core';
 import type { FieldBase } from '../field-base';
 
 export class AutoNumberFieldDto extends AutoNumberFieldCore implements FieldBase {
@@ -18,5 +19,9 @@ export class AutoNumberFieldDto extends AutoNumberFieldCore implements FieldBase
       return value == null || typeof value === 'object' ? value : JSON.parse(value as string);
     }
     return value;
+  }
+
+  setMetadata(meta: IFormulaFieldMeta) {
+    this.meta = meta;
   }
 }

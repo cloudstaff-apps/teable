@@ -11,6 +11,10 @@ export enum Events {
   // BASE_CLONE = 'base.clone',
   // BASE_MOVE = 'base.move',
 
+  BASE_NODE_CREATE = 'base.node.create',
+  BASE_NODE_DELETE = 'base.node.delete',
+  BASE_NODE_UPDATE = 'base.node.update',
+
   TABLE_CREATE = 'table.create',
   TABLE_DELETE = 'table.delete',
   TABLE_UPDATE = 'table.update',
@@ -23,13 +27,24 @@ export enum Events {
   TABLE_RECORD_DELETE = 'table.record.delete',
   TABLE_RECORD_UPDATE = 'table.record.update',
 
+  TABLE_BUTTON_CLICK = 'table.button.click',
+
   TABLE_VIEW_CREATE = 'table.view.create',
   TABLE_VIEW_DELETE = 'table.view.delete',
   TABLE_VIEW_UPDATE = 'table.view.update',
 
-  CONTROLLER_RECORDS_CREATE = 'controller.records.create',
-  CONTROLLER_RECORDS_UPDATE = 'controller.records.update',
-  CONTROLLER_RECORDS_DELETE = 'controller.records.delete',
+  OPERATION_RECORDS_CREATE = 'operation.records.create',
+  OPERATION_RECORDS_DELETE = 'operation.records.delete',
+  OPERATION_RECORDS_UPDATE = 'operation.records.update',
+  OPERATION_RECORDS_ORDER_UPDATE = 'operation.records.order.update',
+  OPERATION_FIELDS_CREATE = 'operation.fields.create',
+  OPERATION_FIELDS_DELETE = 'operation.fields.delete',
+  OPERATION_FIELD_CONVERT = 'operation.field.convert',
+  OPERATION_PASTE_SELECTION = 'operation.paste.selection',
+  OPERATION_VIEW_DELETE = 'operation.view.delete',
+  OPERATION_VIEW_CREATE = 'operation.view.create',
+  OPERATION_VIEW_UPDATE = 'operation.view.update',
+  OPERATION_PUSH = 'operation.push',
 
   TABLE_USER_RENAME_COMPLETE = 'table.user.rename.complete',
 
@@ -46,10 +61,57 @@ export enum Events {
   // USER_PASSWORD_RESET = 'user.password.reset',
   USER_PASSWORD_CHANGE = 'user.password.change',
   // USER_PASSWORD_FORGOT = 'user.password.forgot'
+  USER_EMAIL_CHANGE = 'user.email.change',
 
   COLLABORATOR_CREATE = 'collaborator.create',
   COLLABORATOR_DELETE = 'collaborator.delete',
+  COLLABORATOR_UPDATE = 'collaborator.update',
 
+  BASE_FOLDER_CREATE = 'base.folder.create',
+  BASE_FOLDER_DELETE = 'base.folder.delete',
+  BASE_FOLDER_UPDATE = 'base.folder.update',
+
+  DASHBOARD_CREATE = 'dashboard.create',
+  DASHBOARD_DELETE = 'dashboard.delete',
+  DASHBOARD_UPDATE = 'dashboard.update',
+
+  WORKFLOW_CREATE = 'workflow.create',
+  WORKFLOW_DELETE = 'workflow.delete',
+  WORKFLOW_UPDATE = 'workflow.update',
   WORKFLOW_ACTIVATE = 'workflow.activate',
   WORKFLOW_DEACTIVATE = 'workflow.deactivate',
+
+  APP_CREATE = 'app.create',
+  APP_DELETE = 'app.delete',
+  APP_UPDATE = 'app.update',
+
+  CROP_IMAGE = 'crop.image',
+  CROP_IMAGE_COMPLETE = 'crop.image.complete',
+
+  RECORD_HISTORY_CREATE = 'record.history.create',
+
+  // following make no sense just for testing
+  BASE_EXPORT_COMPLETE = 'base.export.complete',
+
+  LAST_VISIT_CLEAR = 'last.visit.clear',
+  LAST_VISIT_UPDATE = 'last.visit.update',
+
+  AUDIT_LOG_SAVED = 'audit-log.saved',
+
+  NOTIFY_MAIL_MERGE = 'notify.mail.merge',
+
+  // record source
+  TABLE_RECORD_CREATE_RELATIVE = 'table.record.create.relative',
+
+  // Invitation funnel
+  INVITATION_EMAIL_SEND = 'invitation.email.send',
+  INVITATION_LINK_CREATE = 'invitation.link.create',
+  INVITATION_ACCEPT = 'invitation.accept',
+
+  // Access token lifecycle
+  ACCESS_TOKEN_CREATE = 'access-token.create',
+  ACCESS_TOKEN_DELETE = 'access-token.delete',
+
+  // Table export
+  TABLE_EXPORT = 'table.export',
 }

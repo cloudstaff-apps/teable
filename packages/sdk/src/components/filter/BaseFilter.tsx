@@ -1,10 +1,12 @@
-import { Plus } from '@teable/icons';
+import type { IConjunction } from '@teable/core';
+import { Plus, ListPlus } from '@teable/icons';
 import { Button, cn } from '@teable/ui-lib';
 import { produce } from 'immer';
 import { set, get } from 'lodash';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from '../../context/app/i18n';
 import { Condition } from './condition';
+import { ConjunctionSelect } from './condition/ConjunctionSelect';
 import { BaseFilterContext } from './context';
 import { useControllableState } from './hooks';
 import type {
@@ -20,9 +22,9 @@ import type {
 
 export interface IBaseFilterProps<T extends IConditionItemProperty = IConditionItemProperty> {
   maxDepth?: number;
-  value: IBaseFilterValue<T>;
+  value?: IBaseFilterValue<T>;
   defaultValue?: IBaseFilterValue<T>;
-  defaultItemValue: IConditionItem<T>;
+  defaultItemValue?: IConditionItem<T>;
   defaultGroupValue?: IConditionGroup<T>;
   onChange: (value: IBaseFilterValue<T>) => void;
   components: {
@@ -34,13 +36,18 @@ export interface IBaseFilterProps<T extends IConditionItemProperty = IConditionI
   contentClassName?: string;
 }
 
+const DEFAULT_VALUE = {
+  conjunction: 'and',
+  children: [],
+};
+
 export const BaseFilter = <T extends IConditionItemProperty>(props: IBaseFilterProps<T>) => {
   const { t } = useTranslation();
   const {
     onChange,
     maxDepth = 2,
-    defaultValue,
-    value: valueProp,
+    defaultValue = DEFAULT_VALUE as IBaseFilterValue<T>,
+    value: valueProp = DEFAULT_VALUE as IBaseFilterValue<T>,
     defaultItemValue,
     defaultGroupValue: defaultGroupValueFromProps,
     footerClassName,
@@ -59,10 +66,12 @@ export const BaseFilter = <T extends IConditionItemProperty>(props: IBaseFilterP
     () =>
       defaultGroupValueFromProps || {
         conjunction: 'and',
-        children: [],
+        children: defaultItemValue ? [{ ...defaultItemValue }] : [],
       },
-    [defaultGroupValueFromProps]
+    [defaultGroupValueFromProps, defaultItemValue]
   );
+
+  const filterContainerRef = useRef<HTMLDivElement>(null);
 
   const createCondition = useCallback(
     (path: IFilterPath, type: 'item' | 'group') => {
@@ -103,24 +112,61 @@ export const BaseFilter = <T extends IConditionItemProperty>(props: IBaseFilterP
     [setValue, value]
   );
 
+  const onConjunctionChange = useCallback(
+    (val: IConjunction | null) => {
+      if (val && value) {
+        setValue({
+          ...value,
+          conjunction: val,
+        });
+      }
+    },
+    [setValue, value]
+  );
+
   const footer = (
-    <div className={cn('flex justify-start gap-1', footerClassName)}>
+    <div
+      role="button"
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      }}
+      className={cn('flex justify-start gap-2', footerClassName)}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        setTimeout(() => {
+          filterContainerRef?.current?.scrollTo({
+            top: filterContainerRef?.current?.scrollHeight,
+            behavior: 'smooth',
+          });
+        }, 0);
+      }}
+    >
       <Button
-        variant="ghost"
-        size="xs"
-        onClick={() =>
+        variant="outline"
+        size="sm"
+        onClick={() => {
           setValue({
             conjunction: valueProp.conjunction,
-            children: [...children, { ...defaultItemValue }],
-          })
-        }
+            children: [
+              ...children,
+              defaultItemValue
+                ? { ...defaultItemValue }
+                : ({ field: null, operator: null, value: null } as T),
+            ],
+          });
+        }}
       >
-        <Plus />
+        <Plus className="size-4" />
         {t('filter.addCondition')}
       </Button>
       <Button
-        variant="ghost"
-        size="xs"
+        variant="outline"
+        size="sm"
         onClick={() => {
           setValue({
             conjunction: valueProp.conjunction,
@@ -128,7 +174,7 @@ export const BaseFilter = <T extends IConditionItemProperty>(props: IBaseFilterP
           });
         }}
       >
-        <Plus />
+        <ListPlus className="size-4" />
         {t('filter.addConditionGroup')}
       </Button>
     </div>
@@ -145,19 +191,34 @@ export const BaseFilter = <T extends IConditionItemProperty>(props: IBaseFilterP
         component: props.components,
       }}
     >
-      <div className={cn('flex flex-1 flex-col overflow-auto', contentClassName)}>
-        {children.map((condition, index) => (
-          <Condition
-            key={index}
-            index={index}
-            value={condition}
-            path={['children', index]}
-            depth={0}
-            conjunction={conjunction}
-          />
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        {children.length > 0 && (
+          <div
+            className={cn('flex flex-1 gap-2 flex-col overflow-auto pr-4 pb-2', contentClassName)}
+            ref={filterContainerRef}
+          >
+            <ConjunctionSelect value={conjunction} onSelect={onConjunctionChange} />
+            {children.map((condition, index) => (
+              <Condition
+                key={index}
+                index={index}
+                value={condition}
+                path={['children', index]}
+                depth={0}
+                conjunction={conjunction}
+              />
+            ))}
+          </div>
+        )}
+
+        {children.length === 0 && (
+          <div className="text-sm font-normal text-muted-foreground">
+            {t('filter.default.empty')}
+          </div>
+        )}
+
+        {footer}
       </div>
-      {footer}
     </BaseFilterContext.Provider>
   );
 };

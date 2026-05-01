@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import type { RatingIcon } from '@teable/core';
-import { Check, DraggableHandle, Maximize2 } from '@teable/icons';
+import { Check, DraggableHandle, MagicAi, Maximize2 } from '@teable/icons';
 import { useMemo } from 'react';
 import { useFieldStaticGetter } from '../../../hooks/use-field-static-getter';
 import { FIELD_TYPE_ORDER, getSpriteMap } from '../../../utils';
@@ -16,11 +16,29 @@ export const useGridIcons = () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         { type: string; IconComponent: React.JSXElementConstructor<any> }[]
       >((pre, type) => {
-        const IconComponent = getFieldStatic(type, false)?.Icon;
-        const LookupIconComponent = getFieldStatic(type, true)?.Icon;
+        const IconComponent = getFieldStatic(type, {
+          isLookup: false,
+          hasAiConfig: false,
+        })?.Icon;
+        const LookupIconComponent = getFieldStatic(type, {
+          isLookup: true,
+          isConditionalLookup: false,
+          hasAiConfig: false,
+        })?.Icon;
+        const ConditionalLookupIconComponent = getFieldStatic(type, {
+          isLookup: true,
+          isConditionalLookup: true,
+          hasAiConfig: false,
+        })?.Icon;
         pre.push({ type: type, IconComponent });
         if (LookupIconComponent) {
           pre.push({ type: `${type}_lookup`, IconComponent: LookupIconComponent });
+        }
+        if (ConditionalLookupIconComponent) {
+          pre.push({
+            type: `${type}_conditional_lookup`,
+            IconComponent: ConditionalLookupIconComponent,
+          });
         }
         return pre;
       }, [])
@@ -45,10 +63,17 @@ export const useGridIcons = () => {
         IconComponent: RATING_ICON_MAP[iconKey],
       }))
     );
+    const aiIcons = getSpriteMap([
+      {
+        type: 'ai',
+        IconComponent: MagicAi,
+      },
+    ]);
     return {
       ...columnHeaderIcons,
       ...rowHeaderIcons,
       ...ratingIcons,
+      ...aiIcons,
     };
   }, [getFieldStatic]);
 };

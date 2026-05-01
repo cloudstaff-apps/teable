@@ -1,65 +1,49 @@
-import { Body, Controller, Get, HttpCode, Patch, Post, Req, Res, UseGuards } from '@nestjs/common';
-import type { IUserMeVo } from '@teable/openapi';
+import { Controller, Delete, Get, HttpCode, Post, Query, Req, Res } from '@nestjs/common';
+import { HttpErrorCode } from '@teable/core';
 import {
-  IAddPasswordRo,
-  IChangePasswordRo,
-  IResetPasswordRo,
-  ISendResetPasswordEmailRo,
-  ISignup,
-  addPasswordRoSchema,
-  changePasswordRoSchema,
-  resetPasswordRoSchema,
-  sendResetPasswordEmailRoSchema,
-  signupSchema,
+  deleteUserSchemaRo,
+  IDeleteUserSchema,
+  type IGetTempTokenVo,
+  type IUserMeVo,
 } from '@teable/openapi';
-import { Response, Request } from 'express';
+import { Response } from 'express';
+import { ClsService } from 'nestjs-cls';
 import { AUTH_SESSION_COOKIE_NAME } from '../../const';
+import { CustomHttpException } from '../../custom.exception';
+import { EmitControllerEvent } from '../../event-emitter/decorators/emit-controller-event.decorator';
+import { Events } from '../../event-emitter/events';
+import type { IClsStore } from '../../types/cls';
 import { ZodValidationPipe } from '../../zod.validation.pipe';
+import { DeleteUserService } from '../user/delete-user/delete-user.service';
 import { AuthService } from './auth.service';
-import { Public } from './decorators/public.decorator';
+import { AllowAnonymous, AllowAnonymousType } from './decorators/allow-anonymous.decorator';
 import { TokenAccess } from './decorators/token.decorator';
-import { LocalAuthGuard } from './guard/local-auth.guard';
-import { pickUserMe } from './utils';
+import { SessionService } from './session/session.service';
 
 @Controller('api/auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
-
-  @Public()
-  @UseGuards(LocalAuthGuard)
-  @HttpCode(200)
-  @Post('signin')
-  async signin(@Req() req: Express.Request) {
-    return req.user;
-  }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly sessionService: SessionService,
+    private readonly cls: ClsService<IClsStore>,
+    private readonly deleteUserService: DeleteUserService
+  ) {}
 
   @Post('signout')
   @HttpCode(200)
+  @EmitControllerEvent(Events.USER_SIGNOUT)
   async signout(@Req() req: Express.Request, @Res({ passthrough: true }) res: Response) {
-    await this.authService.signout(req);
+    await this.sessionService.signout(req);
     res.clearCookie(AUTH_SESSION_COOKIE_NAME);
   }
 
-  @Public()
-  @Post('signup')
-  async signup(
-    @Body(new ZodValidationPipe(signupSchema)) body: ISignup,
-    @Res({ passthrough: true }) res: Response,
-    @Req() req: Express.Request
-  ) {
-    const user = pickUserMe(
-      await this.authService.signup(body.email, body.password, body.defaultSpaceName)
-    );
-    // set cookie, passport login
-    await new Promise<void>((resolve, reject) => {
-      req.login(user, (err) => (err ? reject(err) : resolve()));
-    });
-    return user;
-  }
-
+  @AllowAnonymous(AllowAnonymousType.USER)
   @Get('/user/me')
   async me(@Req() request: Express.Request) {
-    return request.user;
+    return {
+      ...request.user,
+      organization: this.cls.get('organization'),
+    };
   }
 
   @Get('/user')
@@ -68,33 +52,26 @@ export class AuthController {
     return this.authService.getUserInfo(request.user as IUserMeVo);
   }
 
-  @Patch('/change-password')
-  async changePassword(
-    @Body(new ZodValidationPipe(changePasswordRoSchema)) changePasswordRo: IChangePasswordRo,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response
+  @Get('temp-token')
+  async tempToken(): Promise<IGetTempTokenVo> {
+    return this.authService.getTempToken();
+  }
+
+  @Delete('user')
+  async deleteUser(
+    @Req() req: Express.Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query(new ZodValidationPipe(deleteUserSchemaRo)) query: IDeleteUserSchema
   ) {
-    await this.authService.changePassword(changePasswordRo);
-    await this.authService.signout(req);
+    if (query.confirm !== 'DELETE') {
+      throw new CustomHttpException('Invalid confirm', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.auth.invalidConfirm',
+        },
+      });
+    }
+    await this.deleteUserService.deleteUser();
+    await this.sessionService.signout(req);
     res.clearCookie(AUTH_SESSION_COOKIE_NAME);
-  }
-
-  @Post('/send-reset-password-email')
-  @Public()
-  async sendResetPasswordEmail(
-    @Body(new ZodValidationPipe(sendResetPasswordEmailRoSchema)) body: ISendResetPasswordEmailRo
-  ) {
-    return this.authService.sendResetPasswordEmail(body.email);
-  }
-
-  @Post('/reset-password')
-  @Public()
-  async resetPassword(@Body(new ZodValidationPipe(resetPasswordRoSchema)) body: IResetPasswordRo) {
-    return this.authService.resetPassword(body.code, body.password);
-  }
-
-  @Post('/add-password')
-  async addPassword(@Body(new ZodValidationPipe(addPasswordRoSchema)) body: IAddPasswordRo) {
-    return this.authService.addPassword(body.password);
   }
 }

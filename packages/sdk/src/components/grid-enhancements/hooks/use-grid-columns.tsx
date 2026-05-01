@@ -1,31 +1,39 @@
-import type { IAttachmentCellValue, INumberShowAs, ISingleLineTextShowAs } from '@teable/core';
-import { CellValueType, ColorUtils, FieldType } from '@teable/core';
+import type {
+  IAttachmentCellValue,
+  IButtonFieldCellValue,
+  IButtonFieldOptions,
+  INumberShowAs,
+  ISingleLineTextShowAs,
+} from '@teable/core';
+import {
+  RowHeightLevel,
+  CellValueType,
+  ColorUtils,
+  FieldType,
+  checkButtonClickable,
+} from '@teable/core';
 import { useTheme } from '@teable/next-themes';
 import { keyBy } from 'lodash';
 import { LRUCache } from 'lru-cache';
 import { useCallback, useMemo } from 'react';
 import colors from 'tailwindcss/colors';
 import type { ChartType, ICell, IGridColumn, INumberShowAs as IGridNumberShowAs } from '../..';
-import {
-  CellType,
-  hexToRGBA,
-  getFileCover,
-  findClosestWidth,
-  isSystemFileIcon,
-  convertNextImageUrl,
-  onMixedTextClick,
-} from '../..';
+import { CellType, hexToRGBA, getFileCover, onMixedTextClick } from '../..';
 import { useTranslation } from '../../../context/app/i18n/useTranslation';
-import { useFields, useView, useFieldCellEditable } from '../../../hooks';
+import type { IButtonClickStatusHook } from '../../../hooks';
+import { useFields, useTablePermission, useView } from '../../../hooks';
 import type { IFieldInstance, NumberField, Record } from '../../../model';
 import type { GridView } from '../../../model/view';
+import { isMarkdownShowAs, stripMarkdown } from '../../editor/long-text/utils';
 import { getFilterFieldIds } from '../../filter/view-filter/utils';
 import type { IGridTheme } from '../../grid/configs';
 import { GRID_DEFAULT } from '../../grid/configs';
+import { useAttachmentPreviewI18Map } from '../../hooks';
 import {
   GridAttachmentEditor,
   GridDateEditor,
   GridLinkEditor,
+  GridMarkdownEditor,
   GridNumberEditor,
   GridSelectEditor,
   expandPreviewModal,
@@ -34,8 +42,15 @@ import { GridUserEditor } from '../editor/GridUserEditor';
 
 const cellValueStringCache: LRUCache<string, string> = new LRUCache({ max: 1000 });
 
-const iconString = (type: FieldType, isLookup: boolean | undefined) => {
-  return isLookup ? `${type}_lookup` : type;
+const iconString = (
+  type: FieldType,
+  isLookup: boolean | undefined,
+  isConditionalLookup: boolean | undefined
+) => {
+  if (isLookup) {
+    return isConditionalLookup ? `${type}_conditional_lookup` : `${type}_lookup`;
+  }
+  return type;
 };
 
 interface IGenerateColumnsProps {
@@ -58,52 +73,59 @@ const getColumnThemeByField = ({
   field: IFieldInstance;
 }) => {
   const { id, isPending, hasError } = field;
-  const { orange, green, violet, rose, yellow } = colors;
+  const { rose, yellow } = colors;
   const isDark = theme === 'dark';
-  const color_50 = isDark ? 700 : 50;
-  const color_100 = isDark ? 500 : 100;
-  const color_200 = isDark ? 400 : 200;
-  const opacity = isDark ? 0.3 : 0.8;
+  const themeKey = isDark ? 'dark' : 'light';
+  const opacity = isDark ? 1 : 0.8;
+
+  // shades: [bg, bgSelected, bgHovered]
   const colorMap = {
-    sort: orange,
-    group: green,
-    filter: violet,
+    sort: {
+      light: [colors.orange[50], colors.orange[100], colors.orange[200]] as const,
+      dark: ['#251E14', '#2F2518', '#392C1B'] as const,
+    },
+    group: {
+      light: [colors.emerald[50], colors.emerald[100], colors.emerald[200]] as const,
+      dark: ['#0A261F', '#0C3026', '#0D3A2D'] as const,
+    },
+    filter: {
+      light: [colors.violet[50], colors.violet[100], colors.violet[200]] as const,
+      dark: ['#1D1527', '#241A31', '#322245'] as const,
+    },
   };
 
   let customTheme: Partial<IGridTheme> | undefined = undefined;
-  let conditionColorObj = undefined;
 
-  if (groupFieldIds?.has(id)) {
-    conditionColorObj = colorMap.group;
-  }
+  const conditionKey = filterFieldIds?.has(id)
+    ? 'filter'
+    : sortFieldIds?.has(id)
+      ? 'sort'
+      : groupFieldIds?.has(id)
+        ? 'group'
+        : null;
 
-  if (sortFieldIds?.has(id)) {
-    conditionColorObj = colorMap.sort;
-  }
-
-  if (filterFieldIds?.has(id)) {
-    conditionColorObj = colorMap.filter;
-  }
-
-  if (conditionColorObj != null) {
+  if (conditionKey) {
+    const [bg, bgSelected, bgHovered] = colorMap[conditionKey][themeKey];
     customTheme = {
-      cellBg: hexToRGBA(conditionColorObj[color_50], opacity),
-      cellBgHovered: hexToRGBA(conditionColorObj[color_50], opacity),
-      cellBgSelected: hexToRGBA(conditionColorObj[color_100], opacity),
-      columnHeaderBg: hexToRGBA(conditionColorObj[color_100], opacity),
-      columnHeaderBgHovered: hexToRGBA(conditionColorObj[color_200], opacity),
-      columnHeaderBgSelected: hexToRGBA(conditionColorObj[color_200], opacity),
+      cellBg: hexToRGBA(bg, opacity),
+      cellBgHovered: hexToRGBA(bgSelected, opacity),
+      cellBgSelected: hexToRGBA(bgSelected, opacity),
+      columnHeaderBg: hexToRGBA(bgSelected, opacity),
+      columnHeaderBgHovered: hexToRGBA(bgHovered, opacity),
+      columnHeaderBgSelected: hexToRGBA(bgHovered, opacity),
     };
   }
 
   if (hasError || isPending) {
-    const colorObj = hasError ? rose : yellow;
-
+    const c = hasError
+      ? { light: [rose[100], rose[200]] as const, dark: [rose[500], rose[400]] as const }
+      : { light: [yellow[100], yellow[200]] as const, dark: [yellow[500], yellow[400]] as const };
+    const [h, hs] = c[themeKey];
     customTheme = {
       ...customTheme,
-      columnHeaderBg: hexToRGBA(colorObj[color_100], opacity),
-      columnHeaderBgHovered: hexToRGBA(colorObj[color_200], opacity),
-      columnHeaderBgSelected: hexToRGBA(colorObj[color_200], opacity),
+      columnHeaderBg: hexToRGBA(h, opacity),
+      columnHeaderBgHovered: hexToRGBA(hs, opacity),
+      columnHeaderBgSelected: hexToRGBA(hs, opacity),
     };
   }
 
@@ -148,7 +170,8 @@ const useGenerateColumns = () => {
               showAlways: i === 0,
               label: i === 0 ? t('common.summaryTip') : t('common.summary'),
             },
-            icon: iconString(type, isLookup),
+            icon:
+              field.aiConfig != null ? 'ai' : iconString(type, isLookup, field.isConditionalLookup),
           };
         })
         .filter(Boolean)
@@ -165,15 +188,25 @@ const useGenerateColumns = () => {
   );
 };
 
-export const useCreateCellValue2GridDisplay = () => {
+export const useCreateCellValue2GridDisplay = (
+  rowHeight?: RowHeightLevel,
+  recordEditable?: boolean
+) => {
   const { t } = useTranslation();
+  const { resolvedTheme } = useTheme();
+  const i18nMap = useAttachmentPreviewI18Map();
 
   return useCallback(
-    (fields: IFieldInstance[], editable: (field: IFieldInstance) => boolean) =>
-      // eslint-disable-next-line sonarjs/cognitive-complexity
-      (record: Record, col: number): ICell => {
+    (fields: IFieldInstance[]) =>
+      (
+        record: Record,
+        col: number,
+        isPrefilling?: boolean,
+        expandRecord?: (tableId: string, recordId: string) => void,
+        buttonClickStatusHook?: IButtonClickStatusHook
+        // eslint-disable-next-line sonarjs/cognitive-complexity
+      ): ICell => {
         const field = fields[col];
-
         if (field == null) return { type: CellType.Loading };
 
         const {
@@ -187,9 +220,21 @@ export const useCreateCellValue2GridDisplay = () => {
         let cellValue = record.getCellValue(fieldId);
         const validateCellValue = field.validateCellValue(cellValue);
         cellValue = validateCellValue.success ? validateCellValue.data : undefined;
-        const readonly = isComputed || !editable(field);
+        const recordReadOnly = !recordEditable && !isPrefilling;
+        const fieldLocked = record.isLocked(fieldId) && !isPrefilling;
+        const readonly = isComputed || recordReadOnly || fieldLocked;
         const cellId = `${record.id}-${fieldId}`;
-        const baseCellProps = { id: cellId, readonly };
+        const baseCellProps = { id: cellId, readonly, locked: fieldLocked };
+        const isHidden = record.isHidden(fieldId);
+        if (isHidden) {
+          return {
+            ...baseCellProps,
+            type: CellType.Text,
+            data: '',
+            displayData: '',
+            hidden: true,
+          };
+        }
 
         switch (type) {
           case FieldType.SingleLineText: {
@@ -215,19 +260,36 @@ export const useCreateCellValue2GridDisplay = () => {
             };
           }
           case FieldType.LongText: {
+            const rawDisplayData = field.cellValue2String(cellValue);
+            const isMarkdown = isMarkdownShowAs(field.options);
+            const isLookupField = Boolean(field.isLookup);
             return {
               ...baseCellProps,
               type: CellType.Text,
               data: (cellValue as string) || '',
-              displayData: field.cellValue2String(cellValue),
+              displayData: isMarkdown ? stripMarkdown(rawDisplayData) : rawDisplayData,
               isWrap: true,
+              readonly: readonly || isLookupField,
+              readonlyCustomEditor: isLookupField,
+              customEditor: (props, editorRef) => (
+                <GridMarkdownEditor
+                  ref={editorRef}
+                  field={field}
+                  record={record}
+                  readonlyExpandable={Boolean(field.isLookup)}
+                  {...props}
+                />
+              ),
             };
           }
           case FieldType.Date:
           case FieldType.CreatedTime:
           case FieldType.LastModifiedTime: {
             let displayData = '';
-            const { date, time, timeZone } = field.options.formatting;
+            const formatting = field.getDatetimeFormatting();
+            const date = formatting.date;
+            const time = formatting.time;
+            const timeZone = formatting.timeZone;
             const cacheKey = `${fieldId}-${cellValue}-${date}-${time}-${timeZone}`;
 
             if (cellValueStringCache.has(cacheKey)) {
@@ -249,7 +311,6 @@ export const useCreateCellValue2GridDisplay = () => {
               type: CellType.Text,
               data: (cellValue as string) || '',
               displayData,
-              editorWidth: 250,
               customEditor: (props, editorRef) => (
                 <GridDateEditor ref={editorRef} field={field} record={record} {...props} />
               ),
@@ -265,7 +326,8 @@ export const useCreateCellValue2GridDisplay = () => {
           }
           case FieldType.Number:
           case FieldType.Rollup:
-          case FieldType.Formula: {
+          case FieldType.Formula:
+          case FieldType.ConditionalRollup: {
             if (cellValueType === CellValueType.Boolean) {
               return {
                 ...baseCellProps,
@@ -368,6 +430,7 @@ export const useCreateCellValue2GridDisplay = () => {
             const cv = cellValue ? (Array.isArray(cellValue) ? cellValue : [cellValue]) : [];
             const displayData = cv.map(({ title }) => title || t('common.untitled'));
             const choices = cv.map(({ id, title }) => ({ id, name: title }));
+            const { foreignTableId } = field.options;
             return {
               ...baseCellProps,
               type: CellType.Select,
@@ -375,35 +438,43 @@ export const useCreateCellValue2GridDisplay = () => {
               displayData,
               choiceSorted: choices,
               isMultiple,
+              showAddButton: !readonly,
+              onPreview: (activeId: string) => {
+                expandRecord?.(foreignTableId, activeId);
+              },
               customEditor: (props) => <GridLinkEditor field={field} record={record} {...props} />,
             };
           }
           case FieldType.Attachment: {
             const cv = (cellValue ?? []) as IAttachmentCellValue;
-            const data = cv.map(({ id, mimetype, presignedUrl, width, height }) => {
-              const url = getFileCover(mimetype, presignedUrl);
-              return {
-                id,
-                url: isSystemFileIcon(mimetype)
-                  ? url
-                  : convertNextImageUrl({
-                      url,
-                      w: findClosestWidth(width as number, height as number),
-                      q: 75,
-                    }),
-              };
-            });
+            const data = cv.map(
+              ({ id, mimetype, presignedUrl, smThumbnailUrl, lgThumbnailUrl, width, height }) => {
+                const url = getFileCover(mimetype, presignedUrl, resolvedTheme as 'light' | 'dark');
+                const thumbnailUrl =
+                  !rowHeight || rowHeight === RowHeightLevel.Short
+                    ? smThumbnailUrl
+                    : lgThumbnailUrl;
+                return {
+                  id,
+                  url: thumbnailUrl ?? url,
+                  width,
+                  height,
+                };
+              }
+            );
             const displayData = data.map(({ url }) => url);
             return {
               ...baseCellProps,
               type: CellType.Image,
               data,
               displayData,
+              editorWidth: 462,
               onPreview: (activeId: string) => {
                 expandPreviewModal({
                   activeId,
                   field,
                   record,
+                  i18nMap,
                 });
               },
               customEditor: (props) => (
@@ -449,11 +520,7 @@ export const useCreateCellValue2GridDisplay = () => {
               return {
                 ...item,
                 name: title,
-                avatarUrl: convertNextImageUrl({
-                  url: avatarUrl,
-                  w: 64,
-                  q: 100,
-                }),
+                avatarUrl,
               };
             });
 
@@ -461,9 +528,29 @@ export const useCreateCellValue2GridDisplay = () => {
               ...baseCellProps,
               type: CellType.User,
               data: data,
+              editorWidth: 280,
               customEditor: (props, editorRef) => (
                 <GridUserEditor ref={editorRef} field={field} record={record} {...props} />
               ),
+            };
+          }
+          case FieldType.Button: {
+            return {
+              ...baseCellProps,
+              readonly:
+                // readonly ||
+                !checkButtonClickable(
+                  field.options as IButtonFieldOptions,
+                  cellValue as IButtonFieldCellValue
+                ),
+              type: CellType.Button,
+              data: {
+                tableId: field.tableId,
+                cellValue: cellValue as IButtonFieldCellValue,
+                fieldOptions: field.options,
+                statusHook: buttonClickStatusHook,
+                record,
+              },
             };
           }
           default: {
@@ -471,20 +558,25 @@ export const useCreateCellValue2GridDisplay = () => {
           }
         }
       },
-    [t]
+    [i18nMap, recordEditable, resolvedTheme, rowHeight, t]
   );
 };
 
-export function useGridColumns(hasMenu?: boolean) {
+export function useGridColumns(hasMenu?: boolean, hiddenFieldIds?: string[]) {
   const view = useView() as GridView | undefined;
-  const fields = useFields();
+  const originFields = useFields();
   const totalFields = useFields({ withHidden: true, withDenied: true });
-  const fieldEditable = useFieldCellEditable();
   const { resolvedTheme } = useTheme();
   const sort = view?.sort;
   const group = view?.group;
   const filter = view?.filter;
   const isAutoSort = sort && !sort?.manualSort;
+  const permission = useTablePermission();
+
+  const fields = useMemo(() => {
+    const hiddenSet = new Set(hiddenFieldIds ?? []);
+    return originFields.filter((field) => !hiddenSet.has(field.id));
+  }, [originFields, hiddenFieldIds]);
 
   const sortFieldIds = useMemo(() => {
     if (!isAutoSort) return;
@@ -508,8 +600,12 @@ export function useGridColumns(hasMenu?: boolean) {
     if (filter == null) return;
     return getFilterFieldIds(filter?.filterSet, keyBy(totalFields, 'id'));
   }, [filter, totalFields]);
-  const createCellValue2GridDisplay = useCreateCellValue2GridDisplay();
+  const createCellValue2GridDisplay = useCreateCellValue2GridDisplay(
+    view?.options?.rowHeight,
+    permission['record|update']
+  );
   const generateColumns = useGenerateColumns();
+
   return useMemo(
     () => ({
       columns: generateColumns({
@@ -521,9 +617,10 @@ export function useGridColumns(hasMenu?: boolean) {
         groupFieldIds,
         filterFieldIds,
       }),
-      cellValue2GridDisplay: createCellValue2GridDisplay(fields, fieldEditable),
+      cellValue2GridDisplay: createCellValue2GridDisplay(fields),
     }),
     [
+      generateColumns,
       fields,
       view,
       resolvedTheme,
@@ -531,9 +628,7 @@ export function useGridColumns(hasMenu?: boolean) {
       sortFieldIds,
       groupFieldIds,
       filterFieldIds,
-      generateColumns,
       createCellValue2GridDisplay,
-      fieldEditable,
     ]
   );
 }

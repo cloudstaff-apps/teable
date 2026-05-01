@@ -15,6 +15,7 @@ import {
   analyzeFile,
   importTableFromFile,
   inplaceImportTableFromFile,
+  BaseNodeResourceType,
 } from '@teable/openapi';
 import { useBase, LocalStorageKeys } from '@teable/sdk';
 import {
@@ -44,6 +45,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { useState, useRef, useCallback } from 'react';
 import { useLocalStorage } from 'react-use';
+import { getNodeUrl } from '../base/base-node/hooks';
 import { FieldConfigPanel, InplaceFieldConfigPanel } from './field-config-panel';
 import { UploadPanel } from './upload-panel';
 import { UrlPanel } from './UrlPanel';
@@ -84,44 +86,33 @@ export const TableImport = (props: ITableImportProps) => {
   const [shouldAlert, setShouldAlert] = useLocalStorage(LocalStorageKeys.ImportAlert, true);
   const [shouldTips, setShouldTips] = useState(false);
 
-  const { mutateAsync: importNewTableFn, isLoading } = useMutation({
+  const { mutateAsync: importNewTableFn, isPending: isLoading } = useMutation({
     mutationFn: async ({ baseId, importRo }: { baseId: string; importRo: IImportOptionRo }) => {
       return (await importTableFromFile(baseId, importRo)).data;
     },
     onSuccess: (data) => {
       const { defaultViewId: viewId, id: tableId } = data[0];
       onOpenChange?.(false);
-      router.push(
-        {
-          pathname: '/base/[baseId]/[tableId]/[viewId]',
-          query: { baseId: base.id, tableId, viewId },
-        },
-        undefined,
-        {
-          shallow: true,
-        }
-      );
+      const url = getNodeUrl({
+        baseId: base.id,
+        resourceType: BaseNodeResourceType.Table,
+        resourceId: tableId,
+        viewId,
+      });
+      if (url) {
+        router.push(url, undefined, { shallow: true });
+      }
     },
   });
 
-  const { mutateAsync: inplaceImportFn, isLoading: inplaceLoading } = useMutation({
+  const { mutateAsync: inplaceImportFn, isPending: inplaceLoading } = useMutation({
     mutationFn: (args: Parameters<typeof inplaceImportTableFromFile>) => {
       return inplaceImportTableFromFile(...args);
     },
     onSuccess: () => {
       onOpenChange?.(false);
       const { tableId: routerTableId } = router.query;
-      routerTableId !== tableId &&
-        router.push(
-          {
-            pathname: '/base/[baseId]/[tableId]',
-            query: { baseId: base.id, tableId },
-          },
-          undefined,
-          {
-            shallow: true,
-          }
-        );
+      routerTableId !== tableId && router.push(`/base/${base.id}/table/${tableId}`);
     },
   });
 
@@ -177,7 +168,7 @@ export const TableImport = (props: ITableImportProps) => {
     tableId ? inplaceImportTable() : importNewTable();
   };
 
-  const { mutateAsync: analyzeByUrl, isLoading: analyzeLoading } = useMutation({
+  const { mutateAsync: analyzeByUrl, isPending: analyzeLoading } = useMutation({
     mutationFn: analyzeFile,
     onSuccess: (data, params) => {
       const { attachmentUrl, fileType } = params;

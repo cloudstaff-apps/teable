@@ -1,5 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { getValidFilterOperators, FieldType, ViewOpBuilder } from '@teable/core';
+import {
+  getValidFilterOperators,
+  FieldType,
+  ViewOpBuilder,
+  FieldOpBuilder,
+  getValidStatisticFunc,
+  ViewType,
+} from '@teable/core';
 import type {
   IFilterSet,
   ISelectFieldOptionsRo,
@@ -7,11 +14,17 @@ import type {
   IFilterItem,
   IFilter,
   IFilterValue,
+  ILinkFieldOptions,
+  IOtOperation,
+  IColumn,
 } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
 import { isEqual, differenceBy, find, isEmpty } from 'lodash';
 import { ViewService } from '../../view/view.service';
+import { FieldService } from '../field.service';
 import type { IFieldInstance } from '../model/factory';
+import { FieldConvertingLinkService } from './field-converting-link.service';
+import { FieldDeletingService } from './field-deleting.service';
 
 /**
  * This service' purpose is to sync the relative data from field to view
@@ -23,45 +36,271 @@ export class FieldViewSyncService {
 
   constructor(
     private readonly viewService: ViewService,
-    private readonly prismaService: PrismaService
+    private readonly fieldService: FieldService,
+    private readonly prismaService: PrismaService,
+    private readonly fieldDeletingService: FieldDeletingService,
+    private readonly fieldConvertingLinkService: FieldConvertingLinkService
   ) {}
 
-  async deleteViewRelativeByFields(tableId: string, fieldIds: string[]) {
+  async deleteDependenciesByFieldIds(tableId: string, fieldIds: string[]) {
     await this.viewService.deleteViewRelativeByFields(tableId, fieldIds);
+    await this.deleteLinkOptionsDependenciesByFieldIds(tableId, fieldIds);
   }
 
-  async convertFieldRelative(tableId: string, newField: IFieldInstance, oldField: IFieldInstance) {
-    const views = await this.prismaService.view.findMany({
+  // eslint-disable-next-line sonarjs/cognitive-complexity
+  async deleteLinkOptionsDependenciesByFieldIds(tableId: string, fieldIds: string[]) {
+    const foreignFields = await this.getLinkForeignFields(tableId);
+    const deletedFieldIdSet = new Set(fieldIds);
+
+    for (const field of foreignFields) {
+      const ops: IOtOperation[] = [];
+      const { id: fieldId, tableId, options: rawOptions } = field;
+      const options = rawOptions ? JSON.parse(rawOptions) : null;
+
+      if (options == null) continue;
+
+      const { filter, visibleFieldIds } = options as ILinkFieldOptions;
+      const newOptions: ILinkFieldOptions = { ...options };
+      let isOptionsChanged = false;
+
+      if (visibleFieldIds?.length) {
+        const newVisibleFieldIds = visibleFieldIds.filter((id) => !deletedFieldIdSet.has(id));
+        if (!isEqual(newVisibleFieldIds, visibleFieldIds)) {
+          newOptions.visibleFieldIds = newVisibleFieldIds?.length ? newVisibleFieldIds : null;
+          isOptionsChanged = true;
+        }
+      }
+
+      const filterString = JSON.stringify(filter);
+      const filteredFieldIds = fieldIds.filter((id) => filterString?.includes(id));
+
+      if (filter != null && filteredFieldIds.length) {
+        let newFilter: IFilterSet | null = filter;
+        filteredFieldIds.forEach((id) => {
+          if (newFilter) {
+            newFilter = this.viewService.getDeletedFilterByFieldId(newFilter, id);
+          }
+        });
+        newOptions.filter = newFilter ? (newFilter?.filterSet?.length ? newFilter : null) : null;
+        isOptionsChanged = true;
+      }
+
+      if (isOptionsChanged) {
+        ops.push(
+          FieldOpBuilder.editor.setFieldProperty.build({
+            key: 'options',
+            newValue: newOptions,
+            oldValue: options,
+          })
+        );
+      }
+
+      if (ops.length) {
+        await this.fieldService.batchUpdateFields(tableId, [{ fieldId, ops }]);
+      }
+    }
+  }
+
+  async deleteLinkOptionsDependenciesByViewId(tableId: string, viewId: string) {
+    const foreignFields = await this.getLinkForeignFields(tableId);
+
+    for (const field of foreignFields) {
+      const { id: fieldId, tableId, options: rawOptions } = field;
+      const options = rawOptions ? JSON.parse(rawOptions) : null;
+
+      if (options == null) continue;
+
+      const { filterByViewId } = options as ILinkFieldOptions;
+
+      if (filterByViewId == null || filterByViewId !== viewId) continue;
+
+      const ops = [
+        FieldOpBuilder.editor.setFieldProperty.build({
+          key: 'options',
+          oldValue: options,
+          newValue: { ...options, filterByViewId: null },
+        }),
+      ];
+      await this.fieldService.batchUpdateFields(tableId, [{ fieldId, ops }]);
+    }
+  }
+
+  async convertDependenciesByFieldIds(
+    tableId: string,
+    newField: IFieldInstance,
+    oldField: IFieldInstance
+  ) {
+    await this.convertViewDependenciesByFieldIds(tableId, newField, oldField);
+    await this.convertLinkOptionsDependenciesByFieldIds(tableId, newField, oldField);
+    await this.convertLinkLookupFieldId(tableId, newField);
+  }
+
+  async convertLinkLookupFieldId(tableId: string, newField: IFieldInstance) {
+    const prisma = this.prismaService.txClient();
+    const fieldId = newField.id;
+    const resetLinkFieldIds = await this.fieldConvertingLinkService.planResetLinkFieldLookupFieldId(
+      tableId,
+      newField,
+      'field|update'
+    );
+
+    if (isEmpty(resetLinkFieldIds)) {
+      return;
+    }
+
+    await prisma.reference.deleteMany({
+      where: {
+        fromFieldId: fieldId,
+      },
+    });
+
+    await this.fieldDeletingService.resetLinkFieldLookupFieldId(
+      resetLinkFieldIds,
+      tableId,
+      fieldId
+    );
+  }
+
+  async convertLinkOptionsDependenciesByFieldIds(
+    tableId: string,
+    newField: IFieldInstance,
+    oldField: IFieldInstance
+  ) {
+    const convertedFieldId = newField.id;
+    const foreignFields = await this.getLinkForeignFields(tableId);
+
+    for (const field of foreignFields) {
+      const { id: fieldId, tableId, options: rawOptions } = field;
+      const options = rawOptions ? JSON.parse(rawOptions) : null;
+
+      if (options == null) continue;
+
+      const ops: IOtOperation[] = [];
+      const { filter } = options as ILinkFieldOptions;
+
+      if (filter == null || !JSON.stringify(filter).includes(convertedFieldId)) continue;
+
+      const newFilter = this.getNewFilterByFieldChanges(filter, newField, oldField);
+      ops.push(
+        FieldOpBuilder.editor.setFieldProperty.build({
+          key: 'options',
+          oldValue: options,
+          newValue: {
+            ...options,
+            filter: newFilter ? (newFilter?.filterSet?.length ? newFilter : null) : null,
+          },
+        })
+      );
+
+      await this.fieldService.batchUpdateFields(tableId, [{ fieldId, ops }]);
+    }
+  }
+
+  // eslint-disable-next-line sonarjs/cognitive-complexity
+  async convertViewDependenciesByFieldIds(
+    tableId: string,
+    newField: IFieldInstance,
+    oldField: IFieldInstance
+  ) {
+    const views = await this.prismaService.txClient().view.findMany({
       select: {
         filter: true,
         id: true,
         type: true,
+        columnMeta: true,
       },
-      where: { tableId: tableId },
+      where: { tableId: tableId, deletedTime: null },
     });
 
     if (!views?.length) {
       return;
     }
 
+    const opsMap: { [viewId: string]: IOtOperation[] } = {};
     for (let i = 0; i < views.length; i++) {
-      const filterString = views[i].filter;
-      // empty filter or the field is not in filter, skip
-      if (!filterString || !filterString?.includes(newField.id)) {
-        continue;
+      const view = views[i];
+      const viewId = view.id;
+      const filterString = view.filter;
+
+      // if the field is in filter, update the filter
+      if (filterString?.includes(newField.id)) {
+        const filter = JSON.parse(filterString) as NonNullable<IFilter>;
+
+        const newFilter = this.getNewFilterByFieldChanges(filter, newField, oldField);
+
+        const ops = ViewOpBuilder.editor.setViewProperty.build({
+          key: 'filter',
+          newValue: newFilter ? (newFilter?.filterSet?.length ? newFilter : null) : null,
+          oldValue: filter,
+        });
+        opsMap[viewId] = [ops];
       }
-      const filter = JSON.parse(filterString) as NonNullable<IFilter>;
 
-      const newFilter = this.getNewFilterByFieldChanges(filter, newField, oldField);
+      // clear invalid aggregation statisticFunc from columnMeta
+      const columnMetaString = view?.columnMeta;
+      if (columnMetaString) {
+        const columnMeta = JSON.parse(columnMetaString) as {
+          [fieldId: string]: IColumn | null;
+        };
+        const fieldId = newField.id;
+        const meta = columnMeta[fieldId];
+        if (meta && 'statisticFunc' in meta) {
+          const validFuncs = getValidStatisticFunc(newField);
+          const currentFunc = meta.statisticFunc as unknown;
+          if (
+            currentFunc &&
+            Array.isArray(validFuncs) &&
+            !validFuncs.includes(currentFunc as never)
+          ) {
+            const updateOp = ViewOpBuilder.editor.updateViewColumnMeta.build({
+              fieldId,
+              newColumnMeta: { ...meta, statisticFunc: null },
+              oldColumnMeta: { ...meta },
+            });
+            opsMap[viewId] = [...(opsMap[viewId] || []), updateOp];
+          }
+        }
 
-      const ops = ViewOpBuilder.editor.setViewProperty.build({
-        key: 'filter',
-        newValue: newFilter ? (newFilter?.filterSet?.length ? newFilter : null) : null,
-        oldValue: filter,
-      });
+        // For Form views: enforce visibility when field is not null and no default value
+        if (view.type === ViewType.Form) {
+          const defaultValue = (newField.options as { defaultValue?: string })?.defaultValue;
+          const protectedNew = Boolean(newField.notNull) && !defaultValue;
+          const defaultValueOld = (
+            oldField.options as {
+              defaultValue?: string;
+            }
+          )?.defaultValue;
+          const protectedOld = Boolean(oldField.notNull) && !defaultValueOld;
 
-      await this.viewService.updateViewByOps(tableId, views[i].id, [ops]);
+          if (protectedNew && !protectedOld) {
+            const prev = columnMeta[fieldId] ?? {};
+            const updateOp = ViewOpBuilder.editor.updateViewColumnMeta.build({
+              fieldId,
+              newColumnMeta: { ...prev, visible: true } as IColumn,
+              oldColumnMeta: prev as IColumn,
+            });
+            opsMap[viewId] = [...(opsMap[viewId] || []), updateOp];
+          }
+        }
+      }
     }
+
+    await this.viewService.batchUpdateViewByOps(tableId, opsMap);
+  }
+
+  async getLinkForeignFields(tableId: string) {
+    const linkFields = await this.prismaService.txClient().field.findMany({
+      where: { tableId, type: FieldType.Link, deletedTime: null },
+    });
+    const foreignFieldIds = linkFields
+      .map(
+        ({ options }) =>
+          ((options ? JSON.parse(options) : null) as ILinkFieldOptions)?.symmetricFieldId
+      )
+      .filter(Boolean) as string[];
+    return await this.prismaService.txClient().field.findMany({
+      where: { id: { in: foreignFieldIds }, type: FieldType.Link, deletedTime: null },
+    });
   }
 
   getNewFilterByFieldChanges(
@@ -113,7 +352,7 @@ export class FieldViewSyncService {
         });
       const deleteOptions = differenceBy(oldOptions, newOptions, 'id');
       if (!deleteOptions?.length && !updateNameOptions?.length) {
-        return;
+        return filter;
       }
 
       return this.getFilterBySelectTypeChanges(filter, fieldId, updateNameOptions, deleteOptions);

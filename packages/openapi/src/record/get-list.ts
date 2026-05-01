@@ -7,59 +7,93 @@ import {
   recordSchema,
   sortItemSchema,
 } from '@teable/core';
-import type { Axios, AxiosResponse } from 'axios';
-import { axios as axiosInstance } from '../axios';
+import type { AxiosResponse } from 'axios';
+import { groupHeaderRefSchema, groupPointsVoSchema } from '../aggregation/type';
+import { axios } from '../axios';
 import { registerRoute, urlBuilder } from '../utils';
 import { z } from '../zod';
 import { getRecordQuerySchema } from './get';
-import { TQL_README } from './README';
 
 const defaultPageSize = 100;
-const maxPageSize = 2000;
+const maxPageSize = 1000;
 
 export const queryBaseSchema = z.object({
-  viewId: z.string().startsWith(IdPrefix.View).optional().openapi({
+  viewId: z.string().startsWith(IdPrefix.View).optional().meta({
     example: 'viwXXXXXXX',
     description:
-      'Set the view you want to fetch, default is first view. result will filter and sort by view options.',
+      "Set the view you want to fetch. When provided, records will follow that view's filter and sort settings. When omitted, the API queries the table without applying a view.",
   }),
-  filterByTql: z.string().optional().openapi({
+  ignoreViewQuery: z
+    .string()
+    .or(z.boolean())
+    .transform((value: string | boolean) => {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string' && value.toLowerCase() !== 'false') {
+        return true;
+      }
+      return false;
+    })
+    .optional()
+    .meta({
+      description:
+        "When a viewId is specified, configure this to true will ignore the view's filter, sort, etc",
+    }),
+  filterByTql: z.string().optional().meta({
     example: "{field} = 'Completed' AND {field} > 5",
-    description: TQL_README,
+    deprecated: true,
   }),
   filter: z
-    .string()
-    .optional()
-    .transform((value, ctx) => {
-      if (value == null) {
-        return value;
+    .preprocess((val) => {
+      if (val == null) return val;
+      // If it's a string, parse it to object
+      if (typeof val === 'string') {
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val; // Let the schema validation handle the error
+        }
       }
-
-      const parsingResult = filterSchema.safeParse(JSON.parse(value));
-      if (!parsingResult.success) {
-        parsingResult.error.issues.forEach((issue) => {
-          ctx.addIssue(issue);
-        });
-        return z.NEVER;
-      }
-      return parsingResult.data;
-    })
-    .openapi({
+      // If it's already an object, return as-is
+      return val;
+    }, filterSchema.optional())
+    .meta({
       type: 'string',
       description: FILTER_DESCRIPTION,
     }),
   search: z
-    .tuple([z.string(), z.string()])
+    .union([
+      z.tuple([z.string()]),
+      z.tuple([z.string(), z.string()]),
+      z.tuple([
+        z.string(),
+        z.string(),
+        z.union([
+          z
+            .string()
+            .transform((val) => {
+              if (val === 'true') {
+                return true;
+              } else if (val === 'false') {
+                return false;
+              }
+              return true;
+            })
+            .meta({ type: 'string' }),
+          z.boolean(),
+        ]),
+      ]),
+    ])
     .optional()
-    .openapi({
-      default: ['searchValue', 'fieldIdOrName'],
+    // because of the https params only be string, so the boolean params should transform
+    .meta({
+      default: ['searchValue', 'fieldIdOrName', false],
       description: 'Search for records that match the specified field and value',
     }),
   filterLinkCellCandidate: z
     .tuple([z.string().startsWith(IdPrefix.Field), z.string().startsWith(IdPrefix.Record)])
     .or(z.string().startsWith(IdPrefix.Field))
     .optional()
-    .openapi({
+    .meta({
       example: ['fldXXXXXXX', 'recXXXXXXX'],
       description:
         'Filter out the records that can be selected by a given link cell from the relational table. For example, if the specified field is one to many or one to one relationship, recordId for which the field has already been selected will not appear.',
@@ -68,11 +102,14 @@ export const queryBaseSchema = z.object({
     .tuple([z.string().startsWith(IdPrefix.Field), z.string().startsWith(IdPrefix.Record)])
     .or(z.string().startsWith(IdPrefix.Field))
     .optional()
-    .openapi({
+    .meta({
       example: ['fldXXXXXXX', 'recXXXXXXX'],
       description:
         'Filter out selected records based on this link cell from the relational table. Note that viewId, filter, and orderBy will not take effect in this case because selected records has it own order. Ignoring recordId gets all the selected records for the field',
     }),
+  selectedRecordIds: z.array(z.string().startsWith(IdPrefix.Record)).optional().meta({
+    description: 'Filter selected records by record ids',
+  }),
 });
 
 export type IQueryBaseRo = z.infer<typeof queryBaseSchema>;
@@ -80,7 +117,7 @@ export type IQueryBaseRo = z.infer<typeof queryBaseSchema>;
 const orderByDescription =
   'An array of sort objects that specifies how the records should be ordered.';
 
-export const orderBySchema = sortItemSchema.array().openapi({
+export const orderBySchema = sortItemSchema.array().meta({
   type: 'array',
   description: orderByDescription,
 });
@@ -88,50 +125,66 @@ export const orderBySchema = sortItemSchema.array().openapi({
 // with orderBy for content related fetch
 export const contentQueryBaseSchema = queryBaseSchema.extend({
   orderBy: z
-    .string()
-    .optional()
-    .transform((value, ctx) => {
-      if (value == null) {
-        return value;
+    .preprocess((val) => {
+      if (val == null) return val;
+      // If it's a string, parse it to object
+      if (typeof val === 'string') {
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val; // Let the schema validation handle the error
+        }
       }
-
-      const parsingResult = orderBySchema.safeParse(JSON.parse(value));
-      if (!parsingResult.success) {
-        parsingResult.error.issues.forEach((issue) => {
-          ctx.addIssue(issue);
-        });
-        return z.NEVER;
-      }
-      return parsingResult.data;
-    })
-    .openapi({
+      // If it's already an object, return as-is
+      return val;
+    }, orderBySchema.optional())
+    .meta({
       type: 'string',
       description: orderByDescription,
     }),
   groupBy: z
-    .string()
-    .optional()
-    .transform((value, ctx) => {
-      if (value == null) {
-        return value;
+    .preprocess((val) => {
+      if (val == null) return val;
+      // If it's a string, parse it to object
+      if (typeof val === 'string') {
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val; // Let the schema validation handle the error
+        }
       }
-
-      const parsingResult = groupSchema.safeParse(JSON.parse(value));
-      if (!parsingResult.success) {
-        parsingResult.error.issues.forEach((issue) => {
-          ctx.addIssue(issue);
-        });
-        return z.NEVER;
-      }
-      return parsingResult.data;
-    })
-    .openapi({
+      // If it's already an object, return as-is
+      return val;
+    }, groupSchema.optional())
+    .meta({
       type: 'string',
       description: 'An array of group objects that specifies how the records should be grouped.',
     }),
+  collapsedGroupIds: z
+    .preprocess((val) => {
+      if (val == null) return val;
+      // If it's a string, parse it to array
+      if (typeof val === 'string') {
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val; // Let the schema validation handle the error
+        }
+      }
+      // If it's already an array, return as-is
+      return val;
+    }, z.array(z.string()).optional())
+    .meta({
+      type: 'string',
+      description: 'An array of group ids that specifies which groups are collapsed',
+    }),
+  queryId: z.string().optional().meta({
+    example: 'qry_xxxxxxxx',
+    description: 'When provided, other query parameters will be merged with the saved ones.',
+  }),
 });
 
-export const getRecordsRoSchema = getRecordQuerySchema.merge(contentQueryBaseSchema).extend({
+export const getRecordsRoSchema = getRecordQuerySchema.extend(contentQueryBaseSchema.shape).extend({
   take: z
     .string()
     .or(z.number())
@@ -144,7 +197,7 @@ export const getRecordsRoSchema = getRecordQuerySchema.merge(contentQueryBaseSch
     )
     .default(defaultPageSize)
     .optional()
-    .openapi({
+    .meta({
       example: defaultPageSize,
       description: `The record count you want to take, maximum is ${maxPageSize}`,
     }),
@@ -155,7 +208,7 @@ export const getRecordsRoSchema = getRecordQuerySchema.merge(contentQueryBaseSch
     .pipe(z.number().min(0, 'You can not skip a negative count of records'))
     .default(0)
     .optional()
-    .openapi({
+    .meta({
       example: 0,
       description: 'The records count you want to skip',
     }),
@@ -163,7 +216,7 @@ export const getRecordsRoSchema = getRecordQuerySchema.merge(contentQueryBaseSch
 
 export type IGetRecordsRo = z.infer<typeof getRecordsRoSchema>;
 
-export const recordsSchema = recordSchema.array().openapi({
+export const recordsSchema = recordSchema.array().meta({
   example: [
     {
       id: 'recXXXXXXX',
@@ -176,7 +229,7 @@ export const recordsSchema = recordSchema.array().openapi({
 });
 
 export const recordsVoSchema = z.object({
-  records: recordSchema.array().openapi({
+  records: recordSchema.array().meta({
     example: [
       {
         id: 'recXXXXXXX',
@@ -187,10 +240,28 @@ export const recordsVoSchema = z.object({
     ],
     description: 'Array of record objects ',
   }),
-  offset: z.string().optional().openapi({
-    description:
-      'If more records exist, the response includes an offset. Use this offset for fetching the next page of records.',
-  }),
+  extra: z
+    .object({
+      groupPoints: groupPointsVoSchema.optional().meta({
+        description: 'Group points for the view',
+      }),
+      allGroupHeaderRefs: z.array(groupHeaderRefSchema).optional().meta({
+        description: 'All group header refs for the view, including collapsed group headers',
+      }),
+      searchHitIndex: z
+        .array(
+          z.object({
+            recordId: z.string(),
+            fieldId: z.string(),
+          })
+        )
+        .nullable()
+        .optional()
+        .meta({
+          description: 'The index of the records that match the search, highlight the records',
+        }),
+    })
+    .optional(),
 });
 
 export type IRecordsVo = z.infer<typeof recordsVoSchema>;
@@ -200,7 +271,9 @@ export const GET_RECORDS_URL = '/table/{tableId}/record';
 export const GetRecordsRoute: RouteConfig = registerRoute({
   method: 'get',
   path: GET_RECORDS_URL,
-  description: 'Get multiple records',
+  summary: 'List records',
+  description:
+    'Retrieve a list of records with support for filtering, sorting, grouping, and pagination. The response includes record data and optional group information.',
   request: {
     params: z.object({
       tableId: z.string(),
@@ -223,40 +296,19 @@ export const GetRecordsRoute: RouteConfig = registerRoute({
 export async function getRecords(
   tableId: string,
   query?: IGetRecordsRo
-): Promise<AxiosResponse<IRecordsVo>>;
-export async function getRecords(
-  axios: Axios,
-  tableId: string,
-  query?: IGetRecordsRo
-): Promise<AxiosResponse<IRecordsVo>>;
-export async function getRecords(
-  axios: Axios | string,
-  tableId?: string | IGetRecordsRo,
-  query?: IGetRecordsRo
 ): Promise<AxiosResponse<IRecordsVo>> {
-  let theAxios: Axios;
-  let theTableId: string;
-  let theQuery: IGetRecordsRo;
-
-  if (typeof axios === 'string') {
-    theAxios = axiosInstance;
-    theTableId = axios;
-    theQuery = (tableId as IGetRecordsRo) || {};
-  } else {
-    theAxios = axios;
-    theTableId = tableId as string;
-    theQuery = query || {};
-  }
-
   // Add serialization for complex query parameters
   const serializedQuery = {
-    ...theQuery,
-    filter: theQuery.filter ? JSON.stringify(theQuery.filter) : undefined,
-    orderBy: theQuery.orderBy ? JSON.stringify(theQuery.orderBy) : undefined,
-    groupBy: theQuery.groupBy ? JSON.stringify(theQuery.groupBy) : undefined,
+    ...query,
+    filter: query?.filter ? JSON.stringify(query.filter) : undefined,
+    orderBy: query?.orderBy ? JSON.stringify(query.orderBy) : undefined,
+    groupBy: query?.groupBy ? JSON.stringify(query.groupBy) : undefined,
+    collapsedGroupIds: query?.collapsedGroupIds
+      ? JSON.stringify(query.collapsedGroupIds)
+      : undefined,
   };
 
-  return theAxios.get<IRecordsVo>(urlBuilder(GET_RECORDS_URL, { tableId: theTableId }), {
+  return axios.get<IRecordsVo>(urlBuilder(GET_RECORDS_URL, { tableId }), {
     params: serializedQuery,
   });
 }

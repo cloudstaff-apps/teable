@@ -29,15 +29,23 @@ node_modules
 /build
 /dist/
 
+# v2 packages build output
+packages/v2/**/dist/
+
+# Next.js auto-generated type definitions
+**/next-env.d.ts
+
 # Cache
 *.tsbuildinfo
 **/.eslintcache
 .cache/*
 .swc/
+apps/playground/src/routeTree.gen.ts
 
 # Misc
 .DS_Store
 *.pem
+.worktrees/
 
 # Debug
 npm-debug.log*
@@ -45,8 +53,9 @@ pnpm-debug.log*
 
 
 # IDE
-.idea/*
-!.idea/modules.xml
+**/.idea/*
+!**/.idea/modules.xml
+!**/.idea/*.iml
 .project
 .classpath
 *.launch

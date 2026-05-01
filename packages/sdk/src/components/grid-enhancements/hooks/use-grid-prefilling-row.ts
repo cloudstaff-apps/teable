@@ -1,21 +1,37 @@
+import { generateAttachmentId } from '@teable/core';
 import type { IUpdateOrderRo } from '@teable/openapi';
-import { isEqual } from 'lodash';
-import { useCallback, useMemo, useState } from 'react';
-import { useFieldCellEditable, useFields } from '../../../hooks';
+import { isEqual, keyBy } from 'lodash';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useBaseId, useFields, useSession, useTableId, useView } from '../../../hooks';
 import { createRecordInstance } from '../../../model';
+import { extractDefaultFieldsFromFilters } from '../../../utils';
 import { CellType } from '../../grid/interface';
 import type { ICell, ICellItem, IGridColumn, IInnerCell } from '../../grid/interface';
 import { useCreateCellValue2GridDisplay } from './use-grid-columns';
 
 export const useGridPrefillingRow = (columns: (IGridColumn & { id: string })[]) => {
+  const view = useView();
+  const baseId = useBaseId();
+  const tableId = useTableId();
   const fields = useFields();
-  const fieldEditable = useFieldCellEditable();
+  const allFields = useFields({ withHidden: true });
+  const { user } = useSession();
+  const filter = view?.filter;
+  const userId = user.id;
 
   const [prefillingRowOrder, setPrefillingRowOrder] = useState<IUpdateOrderRo>();
   const [prefillingRowIndex, setPrefillingRowIndex] = useState<number>();
   const [prefillingFieldValueMap, setPrefillingFieldValueMap] = useState<
     { [fieldId: string]: unknown } | undefined
   >();
+  const [tempRecordId, setTempRecordId] = useState(() => generateAttachmentId());
+
+  // Reset tempRecordId for each prefilling row session
+  useEffect(() => {
+    if (prefillingRowIndex != null) {
+      setTempRecordId(generateAttachmentId());
+    }
+  }, [prefillingRowIndex]);
 
   const localRecord = useMemo(() => {
     if (prefillingFieldValueMap == null) {
@@ -44,16 +60,49 @@ export const useGridPrefillingRow = (columns: (IGridColumn & { id: string })[]) 
   const getPrefillingCellContent = useCallback<(cell: ICellItem) => ICell>(
     (cell) => {
       const [columnIndex] = cell;
-      const cellValue2GridDisplay = createCellValue2GridDisplay(fields, fieldEditable);
+      const cellValue2GridDisplay = createCellValue2GridDisplay(fields);
       if (localRecord != null) {
         const fieldId = columns[columnIndex]?.id;
-        if (!fieldId) return { type: CellType.Loading };
-        return cellValue2GridDisplay(localRecord, columnIndex);
+        const field = fields.find((field) => field.id === fieldId);
+        if (!fieldId || !field) return { type: CellType.Loading };
+        const cellContent = cellValue2GridDisplay(localRecord, columnIndex, true);
+        if (!field.canCreateFieldRecord) {
+          return {
+            ...cellContent,
+            readonly: true,
+            locked: true,
+          };
+        }
+        return cellContent;
       }
       return { type: CellType.Loading };
     },
-    [columns, createCellValue2GridDisplay, fieldEditable, fields, localRecord]
+    [columns, createCellValue2GridDisplay, fields, localRecord]
   );
+
+  useEffect(() => {
+    if (prefillingRowIndex == null) return;
+
+    const updateDefaultValue = async () => {
+      const fieldValue = await extractDefaultFieldsFromFilters({
+        filter,
+        fieldMap: keyBy(allFields, 'id'),
+        currentUserId: userId,
+        baseId,
+        tableId,
+        isAsync: true,
+      });
+      setPrefillingFieldValueMap((prev) => {
+        if (prev == null) return;
+        return {
+          ...prev,
+          ...fieldValue,
+        };
+      });
+    };
+    updateDefaultValue();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillingRowIndex]);
 
   const onPrefillingCellEdited = useCallback(
     (cell: ICellItem, newVal: IInnerCell) => {
@@ -88,6 +137,7 @@ export const useGridPrefillingRow = (columns: (IGridColumn & { id: string })[]) 
       prefillingRowIndex,
       prefillingRowOrder,
       prefillingFieldValueMap,
+      tempRecordId,
       setPrefillingRowIndex,
       setPrefillingRowOrder,
       onPrefillingCellEdited,
@@ -99,6 +149,7 @@ export const useGridPrefillingRow = (columns: (IGridColumn & { id: string })[]) 
     prefillingRowIndex,
     prefillingRowOrder,
     prefillingFieldValueMap,
+    tempRecordId,
     setPrefillingRowIndex,
     setPrefillingRowOrder,
     onPrefillingCellEdited,

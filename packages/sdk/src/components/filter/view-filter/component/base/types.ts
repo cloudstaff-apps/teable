@@ -13,8 +13,10 @@ interface IBaseSelect<V, O = IOption<V>> {
   options: O[];
   value: string | null;
   search?: boolean | (() => void);
+  onSearch?: (value: string) => void;
   className?: string;
   popoverClassName?: string;
+  placeholderClassName?: string;
   disabled?: boolean;
   notFoundText?: string;
   onSelect: (value: V | null) => void;
@@ -24,6 +26,7 @@ interface IBaseSelect<V, O = IOption<V>> {
   cancelable?: boolean;
   modal?: boolean;
   defaultLabel?: React.ReactNode;
+  groupHeading?: string;
 }
 
 interface IBaseMultipleSelect<V, O = IOption<V>>

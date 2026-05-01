@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { FieldType, CellValueType } from '../constant';
+import type { IFieldVisitor } from '../field-visitor.interface';
 import { SelectFieldCore } from './abstract/select.field.abstract';
 
 export const multipleSelectCelValueSchema = z.array(z.string());
@@ -19,7 +20,7 @@ export class MultipleSelectFieldCore extends SelectFieldCore {
     }
 
     let cellValue = value.split(/[\n\r,]\s?(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((item) => {
-      return item.includes(',') ? item.slice(1, -1) : item;
+      return item.includes(',') ? item.slice(1, -1).trim() : item.trim();
     });
 
     cellValue = shouldExtend
@@ -44,5 +45,9 @@ export class MultipleSelectFieldCore extends SelectFieldCore {
     }
 
     throw new Error(`invalid value: ${value} for field: ${this.name}`);
+  }
+
+  accept<T>(visitor: IFieldVisitor<T>): T {
+    return visitor.visitMultipleSelectField(this);
   }
 }

@@ -2,8 +2,10 @@
 import type { INestApplication } from '@nestjs/common';
 import { Role } from '@teable/core';
 import type {
+  CreateAccessTokenRo,
   CreateAccessTokenVo,
   ICreateSpaceVo,
+  IGetSpaceVo,
   ITableFullVo,
   UpdateAccessTokenRo,
 } from '@teable/openapi';
@@ -24,40 +26,60 @@ import {
   DELETE_SPACE,
   createAxios,
   axios as defaultAxios,
+  createSpace,
+  createBase,
+  deleteSpace,
+  deleteBase,
+  getAccessToken,
+  GET_BASE_ALL,
+  GET_SPACE_LIST,
+  UPDATE_SPACE_COLLABORATE,
+  DELETE_SPACE_COLLABORATOR,
+  CREATE_ACCESS_TOKEN,
+  USER_ME,
+  PrincipalType,
 } from '@teable/openapi';
 import dayjs from 'dayjs';
+import { splitAccessToken } from '../src/features/access-token/access-token.encryptor';
 import { createNewUserAxios } from './utils/axios-instance/new-user';
 import { getError } from './utils/get-error';
-import { createTable, deleteTable, initApp } from './utils/init-app';
+import { createTable, initApp, permanentDeleteSpace } from './utils/init-app';
 
 describe('OpenAPI AccessTokenController (e2e)', () => {
   let app: INestApplication;
-  const baseId = globalThis.testConfig.baseId;
-  const spaceId = globalThis.testConfig.spaceId;
+  let baseId: string;
+  let spaceId: string;
   const email = globalThis.testConfig.email;
   const email2 = 'accesstoken@example.com';
   let table: ITableFullVo;
   let token: CreateAccessTokenVo;
 
-  const defaultCreateRo = {
-    name: 'token1',
-    description: 'token1',
-    scopes: ['table|read', 'record|read'],
-    baseIds: [baseId],
-    spaceIds: [spaceId],
-    expiredTime: dayjs(Date.now() + 1000 * 60 * 60 * 24).format('YYYY-MM-DD'),
-  };
+  let defaultCreateRo: CreateAccessTokenRo;
 
   beforeAll(async () => {
     const appCtx = await initApp();
     app = appCtx.app;
+    const space = await createSpace({ name: 'access token space' }).then((res) => res.data);
+    const base = await createBase({ spaceId: space.id, name: 'access token base' }).then(
+      (res) => res.data
+    );
+    baseId = base.id;
+    spaceId = space.id;
+    defaultCreateRo = {
+      name: 'token1',
+      description: 'token1',
+      scopes: ['table|read', 'record|read'],
+      baseIds: [baseId],
+      spaceIds: [spaceId],
+      expiredTime: dayjs(Date.now() + 1000 * 60 * 60 * 24).format('YYYY-MM-DD'),
+    };
     table = await createTable(baseId, { name: 'table1' });
     token = (await createAccessToken(defaultCreateRo)).data;
     expect(token).toHaveProperty('id');
   });
 
   afterAll(async () => {
-    await deleteTable(baseId, table.id);
+    await permanentDeleteSpace(spaceId);
     const { data } = await listAccessToken();
     for (const { id } of data) {
       await deleteAccessToken(id);
@@ -73,6 +95,12 @@ describe('OpenAPI AccessTokenController (e2e)', () => {
     const error = await getError(() => createAccessToken(ro));
     expect(error?.status).toEqual(400);
     expect(error?.message).contain('expiredTime');
+  });
+
+  it('check access token', async () => {
+    const accessToken = '1234567890';
+    const res = splitAccessToken(accessToken);
+    expect(res).toEqual(null);
   });
 
   it('/api/access-token (GET)', async () => {
@@ -115,9 +143,30 @@ describe('OpenAPI AccessTokenController (e2e)', () => {
     expect(refreshAccessTokenVoSchema.safeParse(res.data).success).toEqual(true);
   });
 
+  it('/api/access-token/:accessTokenId (GET) include deleted spaceIds and baseIds', async () => {
+    const space = await createSpace({ name: 'deleted space' }).then((res) => res.data);
+    const base = await createBase({ spaceId: space.id, name: 'deleted base' }).then(
+      (res) => res.data
+    );
+    const ro = {
+      ...defaultCreateRo,
+      spaceIds: [space.id],
+      baseIds: [base.id],
+    };
+    const { data: newAccessToken } = await createAccessToken(ro);
+    await deleteBase(base.id);
+    await deleteSpace(space.id);
+    const { data } = await getAccessToken(newAccessToken.id);
+    await permanentDeleteSpace(space.id);
+    expect(data.spaceIds).toEqual([]);
+    expect(data.baseIds).toEqual([]);
+  });
+
   describe('validate accessToken permission', () => {
     let tableReadToken: string;
     let recordReadToken: string;
+    let baseReadAllToken: string;
+    let spaceReadToken: string;
     const axios = createAxios();
 
     beforeAll(async () => {
@@ -133,7 +182,20 @@ describe('OpenAPI AccessTokenController (e2e)', () => {
         scopes: ['record|read'],
       });
       recordReadToken = recordReadTokenData.token;
+      const { data: baseReadAllTokenData } = await createAccessToken({
+        ...defaultCreateRo,
+        name: 'base read all token',
+        scopes: ['base|read_all'],
+      });
+      baseReadAllToken = baseReadAllTokenData.token;
       axios.defaults.baseURL = defaultAxios.defaults.baseURL;
+
+      const { data: spaceReadTokenData } = await createAccessToken({
+        ...defaultCreateRo,
+        name: 'space read token',
+        scopes: ['space|read'],
+      });
+      spaceReadToken = spaceReadTokenData.token;
     });
 
     it('get table list has table|read permission', async () => {
@@ -154,6 +216,26 @@ describe('OpenAPI AccessTokenController (e2e)', () => {
         })
       );
       expect(error?.status).toEqual(403);
+    });
+
+    it('get base list has not base|read_all permission', async () => {
+      const error = await getError(() =>
+        axios.get(urlBuilder(GET_BASE_ALL), {
+          headers: {
+            Authorization: `Bearer ${tableReadToken}`,
+          },
+        })
+      );
+      expect(error?.status).toEqual(403);
+    });
+
+    it('get base list has base|read_all permission', async () => {
+      const res = await axios.get(urlBuilder(GET_BASE_ALL), {
+        headers: {
+          Authorization: `Bearer ${baseReadAllToken}`,
+        },
+      });
+      expect(res.status).toEqual(200);
     });
 
     it('get record list has record|read permission', async () => {
@@ -212,6 +294,177 @@ describe('OpenAPI AccessTokenController (e2e)', () => {
       );
       expect(error?.status).toEqual(403);
       await newUserAxios.delete(urlBuilder(DELETE_SPACE, { spaceId }));
+    });
+
+    it('get space list has space|read permission', async () => {
+      const res = await axios.get<IGetSpaceVo[]>(urlBuilder(GET_SPACE_LIST), {
+        headers: {
+          Authorization: `Bearer ${spaceReadToken}`,
+        },
+      });
+      expect(res.status).toEqual(200);
+      expect(res.data.map(({ id }) => id)).toEqual([spaceId]);
+    });
+
+    it('get space list has not space|read permission', async () => {
+      const error = await getError(() =>
+        axios.get<IGetSpaceVo[]>(urlBuilder(GET_SPACE_LIST), {
+          headers: {
+            Authorization: `Bearer ${tableReadToken}`,
+          },
+        })
+      );
+      expect(error?.status).toEqual(403);
+    });
+
+    it('hasFullAccess', async () => {
+      const space = await createSpace({ name: 'has full access space' }).then((res) => res.data);
+      const { data: newAccessToken } = await createAccessToken({
+        ...defaultCreateRo,
+        name: 'has full access token',
+        scopes: ['space|read'],
+      });
+      const { data: fullAccessToken } = await createAccessToken({
+        ...defaultCreateRo,
+        name: 'has full access token',
+        scopes: ['space|read'],
+        hasFullAccess: true,
+      });
+      const newAccessTokenRes = await axios.get<IGetSpaceVo[]>(urlBuilder(GET_SPACE_LIST), {
+        headers: {
+          Authorization: `Bearer ${newAccessToken.token}`,
+        },
+      });
+      const fullAccessTokenRes = await axios.get<IGetSpaceVo[]>(urlBuilder(GET_SPACE_LIST), {
+        headers: {
+          Authorization: `Bearer ${fullAccessToken.token}`,
+        },
+      });
+      await permanentDeleteSpace(space.id);
+      expect(newAccessTokenRes.status).toEqual(200);
+      expect(newAccessTokenRes.data.map(({ id }) => id)).toEqual([spaceId]);
+      expect(fullAccessTokenRes.status).toEqual(200);
+      expect(fullAccessTokenRes.data.map(({ id }) => id)).toEqual(
+        expect.arrayContaining([spaceId, space.id])
+      );
+    });
+
+    it('access token with expiredTime in expired', async () => {
+      const expiredTime = dayjs(Date.now() - 10000).format('YYYY-MM-DD');
+      const { data } = await createAccessToken({
+        ...defaultCreateRo,
+        name: 'expired access token',
+        scopes: ['space|read'],
+        expiredTime,
+      });
+
+      const error = await getError(() =>
+        axios.get(urlBuilder(GET_SPACE_LIST), {
+          headers: {
+            Authorization: `Bearer ${data.token}`,
+          },
+        })
+      );
+      expect(error?.status).toEqual(401);
+    });
+
+    it('space collaborator operations with space|read token should still enforce role hierarchy', async () => {
+      const creatorEmail = `creator-token-${Date.now()}@example.com`;
+      const viewerEmail = `viewer-token-${Date.now()}@example.com`;
+      const creatorAxios = await createNewUserAxios({
+        email: creatorEmail,
+        password: '12345678',
+      });
+      const viewerAxios = await createNewUserAxios({
+        email: viewerEmail,
+        password: '12345678',
+      });
+
+      const { data: testSpace } = await createSpace({
+        name: 'space token collaborator permission',
+      });
+      const testSpaceId = testSpace.id;
+
+      try {
+        await defaultAxios.post(urlBuilder(EMAIL_SPACE_INVITATION, { spaceId: testSpaceId }), {
+          role: Role.Creator,
+          emails: [creatorEmail],
+        });
+        await defaultAxios.post(urlBuilder(EMAIL_SPACE_INVITATION, { spaceId: testSpaceId }), {
+          role: Role.Viewer,
+          emails: [viewerEmail],
+        });
+
+        const viewerUserId = (await viewerAxios.get<{ id: string }>(USER_ME)).data.id;
+        const ownerUserId = globalThis.testConfig.userId;
+
+        const { data: creatorBase } = await creatorAxios.post<{ id: string }>(CREATE_BASE, {
+          spaceId: testSpaceId,
+          name: 'creator token base',
+        });
+
+        const creatorTokenRes = await creatorAxios.post<CreateAccessTokenVo>(CREATE_ACCESS_TOKEN, {
+          name: 'creator space read token',
+          description: 'creator space read token',
+          scopes: ['space|read'],
+          baseIds: [creatorBase.id],
+          spaceIds: [testSpaceId],
+          expiredTime: dayjs(Date.now() + 1000 * 60 * 60 * 24).format('YYYY-MM-DD'),
+        });
+
+        const creatorTokenAxios = createAxios();
+        creatorTokenAxios.defaults.baseURL = defaultAxios.defaults.baseURL;
+        creatorTokenAxios.defaults.headers.common.Authorization = `Bearer ${creatorTokenRes.data.token}`;
+
+        const updateViewerRes = await creatorTokenAxios.patch(
+          urlBuilder(UPDATE_SPACE_COLLABORATE, { spaceId: testSpaceId }),
+          {
+            role: Role.Commenter,
+            principalId: viewerUserId,
+            principalType: PrincipalType.User,
+          }
+        );
+        expect(updateViewerRes.status).toBe(200);
+
+        const updateOwnerError = await getError(() =>
+          creatorTokenAxios.patch(urlBuilder(UPDATE_SPACE_COLLABORATE, { spaceId: testSpaceId }), {
+            role: Role.Viewer,
+            principalId: ownerUserId,
+            principalType: PrincipalType.User,
+          })
+        );
+        expect(updateOwnerError?.status).toBe(400);
+        expect(updateOwnerError?.message).toBe(
+          'Cannot change the role of the only owner of the space'
+        );
+
+        const deleteOwnerError = await getError(() =>
+          creatorTokenAxios.delete(
+            urlBuilder(DELETE_SPACE_COLLABORATOR, { spaceId: testSpaceId }),
+            {
+              params: {
+                principalId: ownerUserId,
+                principalType: PrincipalType.User,
+              },
+            }
+          )
+        );
+        expect(deleteOwnerError?.status).toBe(400);
+        expect(deleteOwnerError?.message).toBe('Cannot delete the only owner of the space');
+
+        const deleteViewerRes = await creatorTokenAxios.delete(
+          urlBuilder(DELETE_SPACE_COLLABORATOR, { spaceId: testSpaceId }),
+          {
+            params: {
+              principalId: viewerUserId,
+              principalType: PrincipalType.User,
+            },
+          }
+        );
+        expect(deleteViewerRes.status).toBe(200);
+      } finally {
+        await permanentDeleteSpace(testSpaceId);
+      }
     });
   });
 });

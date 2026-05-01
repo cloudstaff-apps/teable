@@ -1,6 +1,5 @@
-import { TeableNew } from '@teable/icons';
 import { cn } from '@teable/ui-lib/shadcn';
-import Image from 'next/image';
+import { TeableLogo } from '@/components/TeableLogo';
 import { usePreviewUrl } from '../../hooks/usePreviewUrl';
 
 export const OAuthLogo = (props: { logo?: string; name: string; className?: string }) => {
@@ -10,17 +9,13 @@ export const OAuthLogo = (props: { logo?: string; name: string; className?: stri
   return (
     <div className={cn('relative size-16 overflow-hidden rounded-sm', className)}>
       {logo ? (
-        <Image
+        <img
           src={getPreviewUrl(logo)}
           alt={name}
-          fill
-          sizes="100%"
-          style={{
-            objectFit: 'contain',
-          }}
+          className="absolute inset-0 size-full object-contain"
         />
       ) : (
-        <TeableNew className={cn('size-16 text-black', className)} />
+        <TeableLogo className={cn('size-16', className)} />
       )}
     </div>
   );

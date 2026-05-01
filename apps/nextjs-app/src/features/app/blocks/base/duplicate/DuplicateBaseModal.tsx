@@ -1,8 +1,9 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasPermission } from '@teable/core';
-import { Database } from '@teable/icons';
+import { Check, Database } from '@teable/icons';
 import { duplicateBase, getSpaceList, type IGetBaseVo } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
+import { Spin } from '@teable/ui-lib/base';
 import {
   Button,
   Dialog,
@@ -31,20 +32,28 @@ const DuplicateBase = ({ base }: { base: IGetBaseVo }) => {
   const router = useRouter();
   const { t } = useTranslation(spaceConfig.i18nNamespaces);
   const [baseName, setBaseName] = useState(`${base.name} (${t('space:baseModal.copy')})`);
+  const [successDuplicate, setSuccessDuplicate] = useState(false);
+  const [newBaseId, setNewBaseId] = useState<string>();
 
   const { data: spaceList } = useQuery({
     queryKey: ReactQueryKeys.spaceList(),
     queryFn: () => getSpaceList().then((res) => res.data),
   });
 
-  const { mutateAsync: duplicateBaseMutator } = useMutation({
+  const queryClient = useQueryClient();
+
+  const { mutateAsync: duplicateBaseMutator, isPending: isLoading } = useMutation({
     mutationFn: duplicateBase,
     onSuccess: ({ data }) => {
-      closeModal();
-      router.push({
-        pathname: '/base/[baseId]',
-        query: { baseId: data.id },
+      targetSpaceId &&
+        queryClient.invalidateQueries({
+          queryKey: ReactQueryKeys.baseList(targetSpaceId),
+        });
+      queryClient.invalidateQueries({
+        queryKey: ReactQueryKeys.baseAll(),
       });
+      setSuccessDuplicate(true);
+      setNewBaseId(data.id);
     },
   });
 
@@ -58,7 +67,7 @@ const DuplicateBase = ({ base }: { base: IGetBaseVo }) => {
       return;
     }
 
-    toast.message(t('space:baseModal.copying'));
+    // toast.message(t('space:baseModal.copying'));
 
     duplicateBaseMutator({
       fromBaseId: base.id,
@@ -129,8 +138,29 @@ const DuplicateBase = ({ base }: { base: IGetBaseVo }) => {
             {t('common:actions.cancel')}
           </Button>
         </DialogClose>
-        <Button size="sm" type="submit" onClick={() => onSubmit()}>
-          {t('space:baseModal.duplicateBase')}
+        <Button
+          size="sm"
+          type="submit"
+          onClick={() => {
+            if (successDuplicate && newBaseId) {
+              closeModal();
+              router.push({
+                pathname: '/base/[baseId]',
+                query: { baseId: newBaseId },
+              });
+            } else {
+              onSubmit();
+            }
+          }}
+          className="flex items-center gap-2"
+        >
+          {successDuplicate
+            ? t('space:baseModal.duplicateBaseSucceedAndJump')
+            : t('space:baseModal.duplicateBase')}
+
+          {successDuplicate && <Check className="size-3 text-green-300" />}
+
+          {isLoading && <Spin className="size-4" />}
         </Button>
       </DialogFooter>
     </DialogContent>

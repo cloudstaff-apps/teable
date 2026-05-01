@@ -1,11 +1,16 @@
 import type { IAttachmentCellValue } from '@teable/core';
-import { AttachmentFieldCore } from '@teable/core';
 import type { ICopyVo, IPasteRo } from '@teable/openapi';
-import { RangeType } from '@teable/openapi';
+import { RangeType, UploadType } from '@teable/openapi';
 import type { CombinedSelection, IRecordIndexMap } from '@teable/sdk/components';
 import { SelectionRegionType } from '@teable/sdk/components';
 import type { Field } from '@teable/sdk/model';
-import { extractTableHeader, serializerHtml } from '@/features/app/utils/clipboard';
+import {
+  extractTableContent,
+  extractHtmlHeader,
+  serializerHtml,
+  isTeableHTML,
+  parseNormalHtml,
+} from '@/features/app/utils/clipboard';
 import { uploadFiles } from '@/features/app/utils/uploadFile';
 import { getSelectionCell } from './selection';
 
@@ -63,65 +68,159 @@ export const filePasteHandler = async ({
   fields,
   recordMap,
   selection,
+  baseId,
   requestPaste,
 }: {
   selection: CombinedSelection;
   recordMap: IRecordIndexMap;
   fields: Field[];
   files: FileList;
+  baseId?: string;
   requestPaste: (
-    content: string,
+    content: unknown[][],
     type: RangeType | undefined,
     ranges: IPasteRo['ranges']
   ) => Promise<unknown>;
 }) => {
   const selectionCell = getSelectionCell(selection);
-  const attachments = await uploadFiles(files);
+  const attachments = await uploadFiles(files, UploadType.Table, baseId);
 
   if (selectionCell) {
     const [fieldIndex, recordIndex] = selectionCell;
     const record = recordMap[recordIndex];
     const field = fields[fieldIndex];
-    console.log('selectionCell', selectionCell, record);
     const oldCellValue = (record.getCellValue(field.id) as IAttachmentCellValue) || [];
     await record.updateCell(field.id, [...oldCellValue, ...attachments]);
   } else {
-    const attachmentsStrings = attachments
-      .map(({ name, token }) => {
-        return AttachmentFieldCore.itemString(name, token);
-      })
-      .join(AttachmentFieldCore.CELL_VALUE_STRING_SPLITTER);
-    await requestPaste(attachmentsStrings, rangeTypes[selection.type], selection.serialize());
+    await requestPaste([[attachments]], rangeTypes[selection.type], selection.serialize());
   }
 };
 
 export const textPasteHandler = async (
+  e: React.ClipboardEvent,
   selection: CombinedSelection,
   requestPaste: (
-    content: string,
+    content: string | unknown[][] | undefined,
     type: RangeType | undefined,
     ranges: IPasteRo['ranges'],
     header: IPasteRo['header']
   ) => Promise<void>
 ) => {
-  const clipboardContent = await navigator.clipboard.read();
-  const hasHtml = clipboardContent[0].types.includes(ClipboardTypes.html);
-  const text = clipboardContent[0].types.includes(ClipboardTypes.text)
-    ? await (await clipboardContent[0].getType(ClipboardTypes.text)).text()
+  const hasHtml = e.clipboardData.types.includes(ClipboardTypes.html);
+  const html = hasHtml ? e.clipboardData.getData(ClipboardTypes.html) : '';
+  const header = extractHtmlHeader(html);
+  const text = e.clipboardData.types.includes(ClipboardTypes.text)
+    ? e.clipboardData.getData(ClipboardTypes.text)
     : '';
-  const html = hasHtml
-    ? await (await clipboardContent[0].getType(ClipboardTypes.html)).text()
-    : undefined;
-  const header = extractTableHeader(html);
+
+  const cellValues = hasHtml
+    ? isTeableHTML(html)
+      ? extractTableContent(html)
+      : parseNormalHtml(html)
+    : [];
 
   if (header.error) {
     throw new Error(header.error);
   }
 
   await requestPaste(
-    hasHtml ? text : text.trim(),
+    hasHtml ? cellValues : text,
     rangeTypes[selection.type],
     selection.serialize(),
     header.result
   );
+};
+
+export const textPasteHandlerWithData = async (
+  clipboardData: {
+    html: string;
+    text: string;
+    hasHtml: boolean;
+  },
+  selection: CombinedSelection,
+  requestPaste: (
+    content: string | unknown[][] | undefined,
+    type: RangeType | undefined,
+    ranges: IPasteRo['ranges'],
+    header: IPasteRo['header']
+  ) => Promise<void>
+) => {
+  const { html, text, hasHtml } = clipboardData;
+  const header = extractHtmlHeader(html);
+
+  const cellValues = hasHtml
+    ? isTeableHTML(html)
+      ? extractTableContent(html)
+      : parseNormalHtml(html)
+    : [];
+
+  if (header.error) {
+    throw new Error(header.error);
+  }
+
+  await requestPaste(
+    hasHtml ? cellValues : text,
+    rangeTypes[selection.type],
+    selection.serialize(),
+    header.result
+  );
+};
+
+export const getCellPasteInfo = (e: React.ClipboardEvent) => {
+  const hasHtml = e.clipboardData.types.includes(ClipboardTypes.html);
+  const html = hasHtml ? e.clipboardData.getData(ClipboardTypes.html) : '';
+  const header = extractHtmlHeader(html);
+
+  return {
+    cellValues: hasHtml
+      ? isTeableHTML(html)
+        ? extractTableContent(html)
+        : parseNormalHtml(html)
+      : [],
+    header,
+  };
+};
+
+export const getExpandInfo = (
+  selection: CombinedSelection,
+  rowCount: number | null,
+  fields: Field[],
+  cellValues?: unknown[][]
+) => {
+  if (!rowCount || !cellValues) {
+    return {
+      isExpand: false,
+      expandRowCount: 0,
+      expandColCount: 0,
+    };
+  }
+
+  const computedFieldIndexes = fields.filter((field) => field.isComputed).map((field) => field.id);
+
+  if (selection.type === SelectionRegionType.Cells) {
+    const [startRange, endRange] = selection.ranges;
+    const [startCol, startRow] = startRange;
+    const [endCol, endRow] = endRange;
+    const selectionRows = endRow - startRow + 1;
+    const selectionCols = endCol - startCol + 1;
+    const pasteRecordLength = cellValues?.length ?? 0;
+    const pasteFieldsLength = cellValues?.[0]?.length ?? 0;
+    const additionRecordsLength = rowCount ? pasteRecordLength - (rowCount - startRow) : 0;
+    const additionFieldsLength =
+      pasteFieldsLength - (fields.length - startCol - computedFieldIndexes.length);
+
+    const isExpand = additionRecordsLength > 0 || additionFieldsLength > 0;
+
+    return {
+      isExpand,
+      expandRowCount: selectionRows,
+      expandColCount: selectionCols,
+    };
+  }
+
+  return {
+    isExpand: false,
+    expandRowCount: 0,
+    expandColCount: 0,
+  };
 };

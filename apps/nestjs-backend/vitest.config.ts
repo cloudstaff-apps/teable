@@ -5,22 +5,33 @@ import { configDefaults, defineConfig } from 'vitest/config';
 const testFiles = ['**/src/**/*.{test,spec}.{js,ts}'];
 
 export default defineConfig({
-  plugins: [swc.vite({}), tsconfigPaths()],
+  resolve: {
+    conditions: ['@teable/source'],
+  },
+  ssr: {
+    resolve: {
+      conditions: ['@teable/source'],
+      externalConditions: ['@teable/source'],
+    },
+  },
+  plugins: [
+    swc.vite({
+      jsc: {
+        target: 'es2022',
+      },
+    }),
+    tsconfigPaths(),
+  ],
   cacheDir: '../../.cache/vitest/nestjs-backend/unit',
   test: {
     globals: true,
     environment: 'node',
     passWithNoTests: true,
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
+    pool: 'forks',
     coverage: {
       provider: 'v8',
       reportsDirectory: './coverage/unit',
-      extension: ['.js', '.ts'],
-      include: ['src/**/*'],
+      include: ['src/**/*.{js,ts}'],
     },
     include: testFiles,
     exclude: [

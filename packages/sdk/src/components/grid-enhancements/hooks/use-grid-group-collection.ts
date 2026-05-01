@@ -1,37 +1,46 @@
 import type { IAttachmentCellValue, INumberShowAs, ISingleLineTextShowAs } from '@teable/core';
-import { CellValueType, ColorUtils, FieldType } from '@teable/core';
+import { CellValueType, ColorUtils, FieldType, validateDateFieldValueLoose } from '@teable/core';
+import { useTheme } from '@teable/next-themes';
 import { LRUCache } from 'lru-cache';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from '../../../context/app/i18n/useTranslation';
 import { useFields, useView } from '../../../hooks';
 import type { IFieldInstance } from '../../../model';
-import { getFileCover } from '../../editor';
+import { getFileCover, isSystemFileIcon } from '../../editor';
 import { GRID_DEFAULT } from '../../grid/configs';
 import type { IGridColumn } from '../../grid/interface';
 import type { ChartType, ICell, INumberShowAs as IGridNumberShowAs } from '../../grid/renderers';
 import { CellType } from '../../grid/renderers';
+import { cellDate2String } from '../utils';
 
 const cellValueStringCache: LRUCache<string, string> = new LRUCache({ max: 100 });
 
 const { columnWidth } = GRID_DEFAULT;
 
 const generateGroupColumns = (fields: IFieldInstance[]): IGridColumn[] => {
-  const iconString = (type: FieldType, isLookup: boolean | undefined) => {
-    return isLookup ? `${type}_lookup` : type;
+  const iconString = (
+    type: FieldType,
+    isLookup: boolean | undefined,
+    isConditionalLookup: boolean | undefined
+  ) => {
+    if (isLookup) {
+      return isConditionalLookup ? `${type}_conditional_lookup` : `${type}_lookup`;
+    }
+    return type;
   };
 
   return fields
     .map((field) => {
       if (!field) return;
 
-      const { id, type, name, description, isLookup } = field;
+      const { id, type, name, description, isLookup, isConditionalLookup } = field;
 
       return {
         id,
         name,
         width: columnWidth,
         description,
-        icon: iconString(type, isLookup),
+        icon: iconString(type, isLookup, isConditionalLookup),
       };
     })
     .filter(Boolean) as IGridColumn[];
@@ -39,16 +48,25 @@ const generateGroupColumns = (fields: IFieldInstance[]): IGridColumn[] => {
 
 const useGenerateGroupCellFn = () => {
   const { t } = useTranslation();
+  const { resolvedTheme } = useTheme();
   return useCallback(
     (fields: IFieldInstance[]) =>
       // eslint-disable-next-line sonarjs/cognitive-complexity
-      (cellValue: unknown, depth: number): ICell => {
+      (_cellValue: unknown, depth: number): ICell => {
         const field = fields[depth];
 
         if (field == null) return { type: CellType.Loading };
 
         const { id: fieldId, type, isMultipleCellValue: isMultiple, cellValueType } = field;
         const emptyStr = '(Empty)';
+
+        const validateCellValue =
+          field.cellValueType === CellValueType.DateTime
+            ? validateDateFieldValueLoose(_cellValue)
+            : field.validateCellValue(_cellValue);
+        const cellValue = (
+          validateCellValue.success ? validateCellValue.data : undefined
+        ) as unknown;
 
         if (cellValue == null) {
           return {
@@ -88,18 +106,22 @@ const useGenerateGroupCellFn = () => {
           case FieldType.CreatedTime:
           case FieldType.LastModifiedTime: {
             let displayData = '';
-            const { date, time, timeZone } = field.options.formatting;
+            const { date, time, timeZone } = field.getDatetimeFormatting();
             const cacheKey = `${fieldId}-${cellValue}-${date}-${time}-${timeZone}`;
 
             if (cellValueStringCache.has(cacheKey)) {
               displayData = cellValueStringCache.get(cacheKey) || '';
             } else {
-              displayData = field.cellValue2String(cellValue);
+              displayData = cellDate2String(
+                cellValue,
+                field.getDatetimeFormatting(),
+                field.isMultipleCellValue
+              );
               cellValueStringCache.set(cacheKey, displayData);
             }
             return {
               type: CellType.Text,
-              data: (cellValue as string) || '',
+              data: (cellValue as string) || emptyStr,
               displayData,
             };
           }
@@ -113,7 +135,8 @@ const useGenerateGroupCellFn = () => {
           }
           case FieldType.Number:
           case FieldType.Rollup:
-          case FieldType.Formula: {
+          case FieldType.Formula:
+          case FieldType.ConditionalRollup: {
             if (cellValueType === CellValueType.Boolean) {
               return {
                 type: CellType.Boolean,
@@ -125,8 +148,8 @@ const useGenerateGroupCellFn = () => {
             if (cellValueType === CellValueType.DateTime) {
               return {
                 type: CellType.Text,
-                data: (cellValue as string) || '',
-                displayData: field.cellValue2String(cellValue),
+                data: (cellValue as string) || emptyStr,
+                displayData: (cellValue as string) || emptyStr,
               };
             }
 
@@ -204,10 +227,15 @@ const useGenerateGroupCellFn = () => {
           }
           case FieldType.Attachment: {
             const cv = (cellValue ?? []) as IAttachmentCellValue;
-            const data = cv.map(({ id, mimetype, presignedUrl }) => ({
-              id,
-              url: getFileCover(mimetype, presignedUrl),
-            }));
+            const data = cv.map(({ id, mimetype, presignedUrl, smThumbnailUrl, width, height }) => {
+              const url = getFileCover(mimetype, presignedUrl, resolvedTheme as 'light' | 'dark');
+              return {
+                id,
+                url: isSystemFileIcon(mimetype) ? url : smThumbnailUrl ?? url,
+                width,
+                height,
+              };
+            });
             const displayData = data.map(({ url }) => url);
             return {
               type: CellType.Image,
@@ -247,7 +275,14 @@ const useGenerateGroupCellFn = () => {
           case FieldType.CreatedBy:
           case FieldType.LastModifiedBy: {
             const cv = cellValue ? (Array.isArray(cellValue) ? cellValue : [cellValue]) : [];
-            const data = cv.map(({ id, title }) => ({ id, name: title }));
+            const data = cv.map((item) => {
+              const { title, avatarUrl } = item;
+              return {
+                ...item,
+                name: title,
+                avatarUrl,
+              };
+            });
 
             return {
               type: CellType.User,
@@ -259,7 +294,7 @@ const useGenerateGroupCellFn = () => {
           }
         }
       },
-    [t]
+    [resolvedTheme, t]
   );
 };
 

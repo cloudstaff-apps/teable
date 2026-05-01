@@ -1,8 +1,6 @@
-import type { IUserCellValue, ISelectFieldChoice } from '@teable/core';
-
 export interface IStackData {
   id: string;
-  data: IUserCellValue | ISelectFieldChoice;
+  data: unknown;
   count: number;
 }
 
@@ -15,4 +13,5 @@ export interface IKanbanPermission {
   cardEditable: boolean;
   cardDeletable: boolean;
   cardDraggable: boolean;
+  cardCommentCreatable: boolean;
 }

@@ -22,6 +22,7 @@ export const statisticsValue2DisplayValue = (
   const { cellValueType } = field;
 
   switch (statFunc) {
+    case StatisticsFunc.Count:
     case StatisticsFunc.Empty:
     case StatisticsFunc.Filled:
     case StatisticsFunc.Unique:
@@ -38,7 +39,7 @@ export const statisticsValue2DisplayValue = (
     case StatisticsFunc.LatestDate:
     case StatisticsFunc.EarliestDate: {
       if ([CellValueType.Number, CellValueType.DateTime].includes(cellValueType)) {
-        return field.cellValue2String(defaultToZero(value, statFunc));
+        return field.item2String(defaultToZero(value, statFunc));
       }
       return String(value);
     }

@@ -5,20 +5,23 @@ import {
   AppProvider,
   FieldProvider,
   SessionProvider,
+  ShareViewProxy,
   ViewProvider,
+  ShareViewContext,
 } from '@teable/sdk/context';
 import { getWsPath } from '@teable/sdk/context/app/useConnection';
+import { addQueryParamsToWebSocketUrl } from '@teable/sdk/utils';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
+import { useTranslation } from 'next-i18next';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useAutoFavicon } from '@/features/app/hooks/useAutoFavicon';
+import { useBrand } from '@/features/app/hooks/useBrand';
+import { useEnv } from '@/features/app/hooks/useEnv';
 import { useSdkLocale } from '@/features/app/hooks/useSdkLocale';
 import { AppLayout } from '@/features/app/layouts';
-import { addQueryParamsToWebSocketUrl } from '@/features/app/utils/socket-url';
 import { ShareTablePermissionProvider } from './ShareTablePermissionProvider';
 import { ShareView } from './ShareView';
-import { ShareViewPageContext } from './ShareViewPageContext';
-import { ViewProxy } from './ViewProxy';
 
 export interface IShareViewPageProps {
   shareViewData: ShareViewGetVo;
@@ -29,8 +32,11 @@ export const ShareViewPage = (props: IShareViewPageProps) => {
   const { tableId, viewId, view, fields, shareId } = props.shareViewData;
   const sdkLocale = useSdkLocale();
   const { i18n } = useTranslation();
+  const { maxSearchFieldCount } = useEnv();
 
   const { query } = useRouter();
+  const { brandName } = useBrand();
+  useAutoFavicon();
 
   const wsPath = useMemo(() => {
     if (typeof window === 'object') {
@@ -45,10 +51,11 @@ export const ShareViewPage = (props: IShareViewPageProps) => {
       wsPath={wsPath}
       locale={sdkLocale}
       forcedTheme={query.theme as string}
+      maxSearchFieldCount={maxSearchFieldCount}
     >
-      <ShareViewPageContext.Provider value={props.shareViewData}>
+      <ShareViewContext.Provider value={props.shareViewData}>
         <Head>
-          <title>{view?.name ?? 'Teable'}</title>
+          <title>{view?.name ? `${view.name} - ${brandName}` : brandName}</title>
         </Head>
         <AppLayout>
           <SessionProvider
@@ -60,6 +67,7 @@ export const ShareViewPage = (props: IShareViewPageProps) => {
               hasPassword: false,
               isAdmin: false,
             }}
+            disabledApi
           >
             <AnchorContext.Provider
               value={{
@@ -67,19 +75,21 @@ export const ShareViewPage = (props: IShareViewPageProps) => {
                 viewId,
               }}
             >
-              <ViewProvider serverData={[view]}>
-                <ViewProxy serverData={[view]}>
-                  <FieldProvider serverSideData={fields}>
-                    <ShareTablePermissionProvider>
-                      <ShareView />
-                    </ShareTablePermissionProvider>
-                  </FieldProvider>
-                </ViewProxy>
-              </ViewProvider>
+              {view && (
+                <ViewProvider serverData={[view]}>
+                  <ShareViewProxy serverData={[view]}>
+                    <FieldProvider serverSideData={fields}>
+                      <ShareTablePermissionProvider>
+                        <ShareView />
+                      </ShareTablePermissionProvider>
+                    </FieldProvider>
+                  </ShareViewProxy>
+                </ViewProvider>
+              )}
             </AnchorContext.Provider>
           </SessionProvider>
         </AppLayout>
-      </ShareViewPageContext.Provider>
+      </ShareViewContext.Provider>
     </AppProvider>
   );
 };

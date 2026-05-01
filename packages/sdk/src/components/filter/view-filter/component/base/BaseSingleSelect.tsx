@@ -4,20 +4,26 @@ import {
   CommandEmpty,
   CommandInput,
   CommandItem,
+  CommandGroup,
   Popover,
   PopoverContent,
   PopoverTrigger,
   CommandList,
   cn,
 } from '@teable/ui-lib';
-import { Check, ChevronsUpDown } from 'lucide-react';
-import { useState, useMemo, useCallback } from 'react';
+import { debounce } from 'lodash';
+import { Check, ChevronDown } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from '../../../../../context/app/i18n';
 import type { IOption, IBaseSelect } from './types';
+import { scrollListByWheel } from './wheel-scroll-list';
 
 function BaseSingleSelect<V extends string, O extends IOption<V> = IOption<V>>(
   props: IBaseSelect<V, O>
 ) {
+  const [searchValue, setSearchValue] = useState('');
+  const [isComposing, setIsComposing] = useState(false);
+
   const { t } = useTranslation();
   const {
     onSelect,
@@ -25,17 +31,21 @@ function BaseSingleSelect<V extends string, O extends IOption<V> = IOption<V>>(
     options,
     className,
     popoverClassName,
+    placeholderClassName,
     disabled = false,
     optionRender,
     notFoundText = t('common.noRecords'),
     displayRender,
     search = true,
+    onSearch,
     placeholder = t('common.search.placeholder'),
     cancelable = false,
     defaultLabel = t('common.untitled'),
     modal,
+    groupHeading,
   } = props;
   const [open, setOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const label = useMemo(() => {
     return options.find((option) => option.value === value)?.label || defaultLabel;
@@ -57,12 +67,48 @@ function BaseSingleSelect<V extends string, O extends IOption<V> = IOption<V>>(
 
   const commandFilter = useCallback(
     (id: string, searchValue: string) => {
-      const name = optionMap[id]?.toLowerCase();
-      const containWord = name.indexOf(searchValue?.toLowerCase()) > -1;
-      return Number(containWord);
+      const name = optionMap?.[id?.trim()]?.toLowerCase() || '';
+      return name.includes(searchValue?.toLowerCase()?.trim()) ? 1 : 0;
     },
     [optionMap]
   );
+
+  const setApplySearchDebounced = useMemo(() => {
+    return onSearch ? debounce(onSearch, 200) : undefined;
+  }, [onSearch]);
+
+  useEffect(() => {
+    if (!isComposing) {
+      setApplySearchDebounced?.(searchValue);
+    }
+  }, [searchValue, isComposing, onSearch, setApplySearchDebounced]);
+
+  const renderOptions = () =>
+    options?.map((option) => (
+      <CommandItem
+        key={option.value}
+        value={option.value}
+        onSelect={() => {
+          // support re-select to reset selection when cancelable is enabled
+          if (cancelable && value === option.value) {
+            onSelect(null);
+            setOpen(false);
+            return;
+          }
+          onSelect(option.value);
+          setOpen(false);
+        }}
+        className="truncate text-sm"
+      >
+        <Check
+          className={cn(
+            'mr-2 h-4 w-4 shrink-0',
+            value === option.value ? 'opacity-100' : 'opacity-0'
+          )}
+        />
+        {optionRender?.(option) ?? option.label ?? defaultLabel}
+      </CommandItem>
+    ));
 
   return (
     <Popover open={open} onOpenChange={setOpen} modal={modal}>
@@ -72,53 +118,51 @@ function BaseSingleSelect<V extends string, O extends IOption<V> = IOption<V>>(
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          size="sm"
-          className={cn('justify-between truncate overflow-hidden px-2', className)}
+          className={cn(
+            'justify-between truncate overflow-hidden px-3 font-normal',
+            className,
+            open && 'text-foreground'
+          )}
         >
           {value ? (
             (selectedValue && displayRender?.(selectedValue)) ?? (
               <span className="truncate">{label}</span>
             )
           ) : (
-            <span className="text-xs font-light text-muted-foreground">
+            <span className={cn('text-sm font-normal text-muted-foreground', placeholderClassName)}>
               {t('common.selectPlaceHolder')}
             </span>
           )}
-          <ChevronsUpDown className="ml-2 size-3 shrink-0 opacity-50" />
+          <ChevronDown
+            className={cn(
+              'ml-2 size-4 shrink-0 text-muted-foreground transition-transform duration-200',
+              open && 'rotate-180'
+            )}
+          />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className={cn('p-1', popoverClassName)}>
-        <Command filter={commandFilter}>
+      <PopoverContent
+        align="start"
+        className={cn('p-1', popoverClassName)}
+        onWheelCapture={(event) => scrollListByWheel(event, listRef.current)}
+      >
+        <Command filter={onSearch ? undefined : commandFilter} shouldFilter={!onSearch}>
           {search ? (
-            <CommandInput placeholder={placeholder} className="placeholder:text-[13px]" />
+            <CommandInput
+              placeholder={placeholder}
+              className="placeholder:text-sm"
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
+              onValueChange={(value) => setSearchValue(value)}
+            />
           ) : null}
           <CommandEmpty>{notFoundText}</CommandEmpty>
-          <CommandList className="mt-1">
-            {options?.map((option) => (
-              <CommandItem
-                key={option.value}
-                value={option.value}
-                onSelect={() => {
-                  // set cancelable support select same value will be reset to null
-                  if (cancelable && value === option.value) {
-                    onSelect(null);
-                    setOpen(false);
-                    return;
-                  }
-                  onSelect(option.value);
-                  setOpen(false);
-                }}
-                className="truncate text-[13px]"
-              >
-                <Check
-                  className={cn(
-                    'mr-2 h-4 w-4 shrink-0',
-                    value === option.value ? 'opacity-100' : 'opacity-0'
-                  )}
-                />
-                {optionRender?.(option) ?? option.label ?? defaultLabel}
-              </CommandItem>
-            ))}
+          <CommandList ref={listRef} className="mt-1">
+            {groupHeading ? (
+              <CommandGroup heading={groupHeading}>{renderOptions()}</CommandGroup>
+            ) : (
+              renderOptions()
+            )}
           </CommandList>
         </Command>
       </PopoverContent>

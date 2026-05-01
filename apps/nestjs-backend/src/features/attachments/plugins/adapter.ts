@@ -1,21 +1,39 @@
 import type { Readable as ReadableStream } from 'node:stream';
+import { resolve } from 'path';
 import { BadRequestException } from '@nestjs/common';
+import { HttpErrorCode } from '@teable/core';
 import { UploadType } from '@teable/openapi';
 import { storageConfig } from '../../../configs/storage';
+import { CustomHttpException } from '../../../custom.exception';
 import type { IObjectMeta, IPresignParams, IPresignRes } from './types';
 
 export default abstract class StorageAdapter {
+  static readonly TEMPORARY_DIR = resolve(process.cwd(), '.temporary');
+
   static readonly getBucket = (type: UploadType) => {
     switch (type) {
       case UploadType.Table:
       case UploadType.Import:
+      case UploadType.ExportBase:
+      case UploadType.Comment:
+      case UploadType.App:
+      case UploadType.ChatFile:
+      case UploadType.Automation:
         return storageConfig().privateBucket;
       case UploadType.Avatar:
       case UploadType.OAuth:
       case UploadType.Form:
+      case UploadType.Plugin:
+      case UploadType.Logo:
+      case UploadType.Template:
+      case UploadType.ChatDataVisualizationCode:
         return storageConfig().publicBucket;
       default:
-        throw new BadRequestException('Invalid upload type');
+        throw new CustomHttpException('Invalid upload type', HttpErrorCode.VALIDATION_ERROR, {
+          localization: {
+            i18nKey: 'httpErrors.attachment.invalidUploadType',
+          },
+        });
     }
   };
 
@@ -31,8 +49,30 @@ export default abstract class StorageAdapter {
         return 'oauth';
       case UploadType.Import:
         return 'import';
+      case UploadType.Plugin:
+        return 'plugin';
+      case UploadType.Comment:
+        return 'comment';
+      case UploadType.Logo:
+        return 'logo';
+      case UploadType.ExportBase:
+        return 'export-base';
+      case UploadType.Template:
+        return 'template';
+      case UploadType.ChatDataVisualizationCode:
+        return 'chat-data-visualization-code';
+      case UploadType.App:
+        return 'app';
+      case UploadType.ChatFile:
+        return 'chat-file';
+      case UploadType.Automation:
+        return 'automation';
       default:
-        throw new BadRequestException('Invalid upload type');
+        throw new CustomHttpException('Invalid upload type', HttpErrorCode.VALIDATION_ERROR, {
+          localization: {
+            i18nKey: 'httpErrors.attachment.invalidUploadType',
+          },
+        });
     }
   };
 
@@ -101,4 +141,39 @@ export default abstract class StorageAdapter {
     stream: Buffer | ReadableStream,
     metadata?: Record<string, unknown>
   ): Promise<{ hash: string; path: string }>;
+
+  abstract uploadFileStream(
+    bucket: string,
+    path: string,
+    stream: Buffer | ReadableStream,
+    metadata?: Record<string, unknown>
+  ): Promise<{ hash: string; path: string }>;
+
+  /**
+   * cut image
+   * @param bucket bucket name
+   * @param path path name
+   * @param width width
+   * @param height height
+   * @param newPath save as new path
+   * @returns cut image url
+   */
+  abstract cropImage(
+    bucket: string,
+    path: string,
+    width?: number,
+    height?: number,
+    newPath?: string
+  ): Promise<string>;
+
+  abstract downloadFile(bucket: string, path: string): Promise<ReadableStream>;
+
+  abstract deleteDir(bucket: string, path: string, throwError?: boolean): Promise<void>;
+
+  /**
+   * delete a single file
+   * @param bucket bucket name
+   * @param path path name
+   */
+  abstract deleteFile(bucket: string, path: string): Promise<void>;
 }

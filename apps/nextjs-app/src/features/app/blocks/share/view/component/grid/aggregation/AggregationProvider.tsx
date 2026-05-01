@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IGridColumnMeta, ITableActionKey, IViewActionKey } from '@teable/core';
-import type { IAggregationRo, IShareViewAggregationsRo } from '@teable/openapi';
+import type { IShareViewAggregationsRo, StatisticsFunc } from '@teable/openapi';
 import { getShareViewAggregations } from '@teable/openapi';
 import {
   useView,
@@ -9,10 +9,10 @@ import {
   useSearch,
   useViewListener,
   useTableListener,
+  ShareViewContext,
 } from '@teable/sdk';
 import type { ReactNode } from 'react';
 import { useCallback, useContext, useMemo, useRef } from 'react';
-import { ShareViewPageContext } from '../../../ShareViewPageContext';
 
 interface IAggregationProviderProps {
   children: ReactNode;
@@ -24,27 +24,30 @@ const useAggregationQuery = (): IShareViewAggregationsRo => {
 
   const field = useMemo(
     () =>
-      view?.columnMeta &&
-      Object.entries(view.columnMeta as IGridColumnMeta).reduce<Partial<IAggregationRo['field']>>(
-        (acc, [fieldId, { statisticFunc }]) => {
-          if (statisticFunc && acc) {
-            const existingArr = acc[statisticFunc] || [];
-            acc[statisticFunc] = [...existingArr, fieldId];
-          }
-          return acc;
-        },
-        {}
-      ),
+      view?.columnMeta
+        ? Object.entries(view.columnMeta as IGridColumnMeta).reduce<
+            Record<StatisticsFunc, string[]>
+          >(
+            (acc, [fieldId, { statisticFunc }]) => {
+              if (statisticFunc && acc) {
+                const existingArr = acc[statisticFunc] || [];
+                acc[statisticFunc] = [...existingArr, fieldId];
+              }
+              return acc;
+            },
+            {} as Record<StatisticsFunc, string[]>
+          )
+        : undefined,
     [view?.columnMeta]
   );
   return useMemo(
-    () => ({ filter: view?.filter, field, search: searchQuery }),
-    [field, searchQuery, view?.filter]
+    () => ({ filter: view?.filter, field, search: searchQuery, groupBy: view?.group }),
+    [field, searchQuery, view?.filter, view?.group]
   );
 };
 
 export const AggregationProvider = ({ children }: IAggregationProviderProps) => {
-  const { tableId, shareId } = useContext(ShareViewPageContext);
+  const { tableId, shareId } = useContext(ShareViewContext);
   const queryClient = useQueryClient();
   const query = useAggregationQuery();
   const queryRef = useRef(query);
@@ -58,7 +61,10 @@ export const AggregationProvider = ({ children }: IAggregationProviderProps) => 
   });
 
   const updateViewAggregations = useCallback(
-    () => queryClient.invalidateQueries(ReactQueryKeys.shareViewAggregations(shareId, query)),
+    () =>
+      queryClient.invalidateQueries({
+        queryKey: ReactQueryKeys.shareViewAggregations(shareId, query),
+      }),
     [query, queryClient, shareId]
   );
 

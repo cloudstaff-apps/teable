@@ -1,7 +1,7 @@
-import { getValidFilterOperators } from '@teable/core';
+import { getValidFilterOperators, isFieldReferenceValue } from '@teable/core';
 import { cn } from '@teable/ui-lib';
 import { useCallback, useMemo } from 'react';
-import { useFieldStaticGetter } from '../../../../hooks';
+import { useFieldStaticGetter, useTables } from '../../../../hooks';
 import { useCrud } from '../../hooks';
 import type { IBaseFilterCustomComponentProps, IConditionItemProperty } from '../../types';
 import { DefaultErrorLabel } from '../component';
@@ -16,7 +16,7 @@ export const FieldSelect = <T extends IConditionItemProperty = IViewFilterCondit
   props: IFieldSelectProps<T>
 ) => {
   const fields = useFields();
-  const { path, value } = props;
+  const { path, value, modal = true, item } = props;
   const { onChange } = useCrud();
   const options = useMemo(() => {
     return fields.map((field) => ({
@@ -26,12 +26,49 @@ export const FieldSelect = <T extends IConditionItemProperty = IViewFilterCondit
     }));
   }, [fields]);
   const fieldStaticGetter = useFieldStaticGetter();
+  const tables = useTables();
+
+  const fieldReferenceValue = useMemo(() => {
+    const candidate = item?.value;
+    return isFieldReferenceValue(candidate) ? candidate : undefined;
+  }, [item?.value]);
+
+  const headingTableId = useMemo(() => {
+    const selectedField = fields.find((field) => field.id === value);
+    if (selectedField?.tableId) {
+      return selectedField.tableId;
+    }
+    const uniqueTableIds = new Set(
+      fields.map((field) => field.tableId).filter((tableId) => Boolean(tableId))
+    );
+    if (uniqueTableIds.size === 1) {
+      return Array.from(uniqueTableIds)[0] as string;
+    }
+    return undefined;
+  }, [fields, value]);
+
+  const groupHeading = useMemo(() => {
+    if (!fieldReferenceValue) {
+      return undefined;
+    }
+    if (headingTableId) {
+      const tableName = tables?.find((table) => table.id === headingTableId)?.name;
+      if (tableName) {
+        return tableName;
+      }
+    }
+    return undefined;
+  }, [fieldReferenceValue, headingTableId, tables]);
   const optionRender = useCallback(
     (option: (typeof options)[number]) => {
-      const { Icon } = fieldStaticGetter(option.type, option.isLookup);
+      const { Icon } = fieldStaticGetter(option.type, {
+        isLookup: option.isLookup,
+        isConditionalLookup: option.isConditionalLookup,
+        hasAiConfig: Boolean(option.aiConfig),
+      });
       return (
         <>
-          <Icon className="shrink-0"></Icon>
+          <Icon className="size-4 shrink-0" />
           <div className="truncate pl-1 text-[13px]">{option.label}</div>
         </>
       );
@@ -42,6 +79,7 @@ export const FieldSelect = <T extends IConditionItemProperty = IViewFilterCondit
   return (
     <BaseSingleSelect
       options={options}
+      modal={modal}
       onSelect={(value) => {
         const newPath = path.slice(0, -1);
         const field = fields.find((f) => f.id === value);
@@ -50,21 +88,28 @@ export const FieldSelect = <T extends IConditionItemProperty = IViewFilterCondit
           return;
         }
         const operators = getValidFilterOperators(field);
-        // change the field, meanwhile, reset the operator and value
+        const currentValue = item?.value;
+        const nextValue = isFieldReferenceValue(currentValue) ? currentValue : null;
+        // change the field, meanwhile, reset the operator and value (keep field reference)
         onChange(newPath, {
           field: value,
           operator: operators[0] || null,
-          value: null,
+          value: nextValue,
         });
       }}
       value={value}
-      className={cn('shrink-0 w-32')}
+      className={cn('shrink-0 w-[156px] h-8 gap-0 pr-1')}
       popoverClassName="w-fit"
       optionRender={optionRender}
       defaultLabel={<DefaultErrorLabel />}
       displayRender={(selectedField) => {
-        const { type, isLookup, label } = selectedField;
-        const { Icon } = fieldStaticGetter(type, isLookup);
+        const { type, isLookup, label, aiConfig, recordRead } = selectedField;
+        const { Icon } = fieldStaticGetter(type, {
+          isLookup,
+          isConditionalLookup: selectedField.isConditionalLookup,
+          hasAiConfig: Boolean(aiConfig),
+          deniedReadRecord: recordRead === false,
+        });
         return (
           <div className="flex flex-1 items-center truncate">
             <Icon className="shrink-0" />
@@ -72,6 +117,7 @@ export const FieldSelect = <T extends IConditionItemProperty = IViewFilterCondit
           </div>
         );
       }}
+      groupHeading={groupHeading}
     />
   );
 };

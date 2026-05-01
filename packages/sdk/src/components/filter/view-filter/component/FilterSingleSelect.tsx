@@ -13,10 +13,11 @@ interface ISingleSelect {
   field: SingleSelectField;
   className?: string;
   popoverClassName?: string;
+  modal?: boolean;
 }
 
 function FilterSingleSelect(props: ISingleSelect) {
-  const { onSelect, field, value, className, popoverClassName } = props;
+  const { onSelect, field, value, className, popoverClassName, modal } = props;
 
   const options = useMemo<IColorOption[]>(() => {
     return field?.options?.choices.map((choice) => ({
@@ -31,13 +32,14 @@ function FilterSingleSelect(props: ISingleSelect) {
     return (
       <div
         key={value}
-        className="truncate rounded-lg px-2"
+        className="flex h-5 max-w-full items-center overflow-hidden rounded-full px-2 text-xs"
         style={{
           backgroundColor: ColorUtils.getHexForColor(color),
           color: ColorUtils.shouldUseLightTextOnColor(color) ? '#ffffff' : '#000000',
         }}
+        title={label}
       >
-        {label}
+        <span className="truncate">{label}</span>
       </div>
     );
   };
@@ -47,11 +49,13 @@ function FilterSingleSelect(props: ISingleSelect) {
       options={options}
       value={value}
       onSelect={onSelect}
-      className={cn('justify-between', className)}
+      className={cn('justify-between px-2 py-0', className)}
       popoverClassName={cn(popoverClassName)}
       optionRender={optionRender}
       displayRender={optionRender}
       defaultLabel={<DefaultErrorLabel />}
+      placeholderClassName="text-sm"
+      modal={modal}
     />
   );
 }

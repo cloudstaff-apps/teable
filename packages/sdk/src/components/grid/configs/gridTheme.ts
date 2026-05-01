@@ -40,6 +40,9 @@ export interface IGridTheme {
   columnHeaderNameColor: string;
   columnResizeHandlerBg: string;
   columnDraggingPlaceholderBg: string;
+  columnStatisticBgHoveredPrimary: string;
+  columnStatisticBgHoveredSecondary: string;
+  columnStatisticBgHoveredTertiary: string;
   rowHeaderTextColor: string;
   appendRowBg: string;
   appendRowBgHovered: string;
@@ -52,6 +55,10 @@ export interface IGridTheme {
   scrollBarBg: string;
   interactionLineColorCommon: string;
   interactionLineColorHighlight: string;
+  searchCursorBg: string;
+  searchTargetIndexBg: string;
+  commentCountBg: string;
+  commentCountTextColor: string;
 }
 
 export const gridTheme: IGridTheme = {
@@ -78,36 +85,42 @@ export const gridTheme: IGridTheme = {
 
   // Cell
   cellBg: colors.white,
-  cellBgHovered: colors.slate[100],
-  cellBgSelected: colors.zinc[100],
-  cellBgLoading: colors.violet[50],
-  cellLineColor: colors.slate[200],
+  cellBgHovered: '#F7F7F7',
+  cellBgSelected: '#F0F0F0',
+  // cellBgSelected: colors.zinc[100],
+  cellBgLoading: hexToRGBA(colors.black, 0.04),
+  cellLineColor: colors.zinc[200],
   cellLineColorActived: colors.black,
-  cellTextColor: colors.zinc[800],
+  cellTextColor: colors.zinc[900],
   cellTextColorHighlight: colors.violet[500],
   cellOptionBg: colors.gray[300],
-  cellOptionBgHighlight: colors.slate[200],
+  cellOptionBgHighlight: colors.zinc[200],
   cellOptionTextColor: colors.black,
 
   // Group Header
-  groupHeaderBgPrimary: colors.slate[50],
-  groupHeaderBgSecondary: colors.slate[100],
-  groupHeaderBgTertiary: colors.slate[200],
+  groupHeaderBgPrimary: '#FAFAFA',
+  groupHeaderBgSecondary: '#F4F4F5',
+  groupHeaderBgTertiary: '#EAEAEB',
+
+  // Column Statistic
+  columnStatisticBgHoveredPrimary: '#F2F2F2',
+  columnStatisticBgHoveredSecondary: '#EDECEC',
+  columnStatisticBgHoveredTertiary: '#E3E2E2',
 
   // Column Header
-  columnHeaderBg: colors.slate[50],
-  columnHeaderBgHovered: colors.slate[100],
-  columnHeaderBgSelected: colors.slate[200],
-  columnHeaderNameColor: colors.zinc[800],
-  columnResizeHandlerBg: colors.slate[400],
+  columnHeaderBg: colors.zinc[50],
+  columnHeaderBgHovered: colors.zinc[100],
+  columnHeaderBgSelected: colors.zinc[200],
+  columnHeaderNameColor: colors.zinc[900],
+  columnResizeHandlerBg: colors.blue[500],
   columnDraggingPlaceholderBg: hexToRGBA(colors.black, 0.2),
 
   // Row Header
-  rowHeaderTextColor: colors.gray[500],
+  rowHeaderTextColor: colors.zinc[500],
 
   // Append Row
-  appendRowBg: colors.slate[50],
-  appendRowBgHovered: colors.slate[100],
+  appendRowBg: colors.zinc[50],
+  appendRowBgHovered: colors.zinc[100],
 
   // Avatar Theme
   avatarBg: colors.gray[100],
@@ -122,6 +135,14 @@ export const gridTheme: IGridTheme = {
   scrollBarBg: colors.gray[400],
 
   // interaction
-  interactionLineColorCommon: colors.slate[300],
-  interactionLineColorHighlight: colors.violet[500],
+  interactionLineColorCommon: colors.zinc[300],
+  interactionLineColorHighlight: colors.blue[500],
+
+  // search cursor
+  searchCursorBg: colors.blue[300],
+  searchTargetIndexBg: colors.blue[100],
+
+  // comment
+  commentCountBg: colors.orange[400],
+  commentCountTextColor: colors.white,
 };

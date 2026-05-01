@@ -1,52 +1,101 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import type { IAttachmentCellValue } from '@teable/core';
-import { FieldKeyType, FieldType } from '@teable/core';
+/* eslint-disable sonarjs/no-identical-functions */
+import { Injectable } from '@nestjs/common';
+import type {
+  IAttachmentCellValue,
+  IAttachmentItem,
+  IButtonFieldCellValue,
+  IButtonFieldOptions,
+  IMakeOptional,
+} from '@teable/core';
+import { FieldKeyType, FieldType, HttpErrorCode, ViewType } from '@teable/core';
 import { PrismaService } from '@teable/db-main-prisma';
-import { UploadType } from '@teable/openapi';
+import {
+  CreateRecordAction,
+  ICreateRecordsRo,
+  IUpdateRecordsRo,
+  UpdateRecordAction,
+} from '@teable/openapi';
 import type {
   IRecordHistoryItemVo,
-  ICreateRecordsRo,
   ICreateRecordsVo,
+  IFormSubmitRo,
   IGetRecordHistoryQuery,
   IRecord,
   IRecordHistoryVo,
   IRecordInsertOrderRo,
   IUpdateRecordRo,
-  IUpdateRecordsRo,
 } from '@teable/openapi';
-import { forEach, keyBy, map } from 'lodash';
-import { AttachmentsStorageService } from '../../attachments/attachments-storage.service';
-import StorageAdapter from '../../attachments/plugins/adapter';
-import { getFullStorageUrl } from '../../attachments/plugins/utils';
-import { CollaboratorService } from '../../collaborator/collaborator.service';
-import { FieldConvertingService } from '../../field/field-calculate/field-converting.service';
+import { isEmpty, keyBy, pick } from 'lodash';
+import { ClsService } from 'nestjs-cls';
+import { IThresholdConfig, ThresholdConfig } from '../../../configs/threshold.config';
+import { CustomHttpException } from '../../../custom.exception';
+import { EventEmitterService } from '../../../event-emitter/event-emitter.service';
+import { Events } from '../../../event-emitter/events';
+import type { IClsStore } from '../../../types/cls';
+import { retryOnDeadlock } from '../../../utils/retry-decorator';
+import { AttachmentsService } from '../../attachments/attachments.service';
+import { getPublicFullStorageUrl } from '../../attachments/plugins/utils';
+import { FieldService } from '../../field/field.service';
 import { createFieldInstanceByRaw } from '../../field/model/factory';
-import { ViewOpenApiService } from '../../view/open-api/view-open-api.service';
-import { ViewService } from '../../view/view.service';
-import { RecordCalculateService } from '../record-calculate/record-calculate.service';
+import { TableDomainQueryService } from '../../table-domain';
+import { RecordModifyService } from '../record-modify/record-modify.service';
+import { RecordModifySharedService } from '../record-modify/record-modify.shared.service';
+import type { IRecordInnerRo } from '../record.service';
 import { RecordService } from '../record.service';
-import { TypeCastAndValidate } from '../typecast.validate';
+import type { IUpdateRecordsInternalRo } from '../type';
 
 @Injectable()
 export class RecordOpenApiService {
   constructor(
-    private readonly recordCalculateService: RecordCalculateService,
     private readonly prismaService: PrismaService,
     private readonly recordService: RecordService,
-    private readonly fieldConvertingService: FieldConvertingService,
-    private readonly attachmentsStorageService: AttachmentsStorageService,
-    private readonly collaboratorService: CollaboratorService,
-    private readonly viewService: ViewService,
-    private readonly viewOpenApiService: ViewOpenApiService
+    private readonly attachmentsService: AttachmentsService,
+    private readonly recordModifyService: RecordModifyService,
+    @ThresholdConfig() private readonly thresholdConfig: IThresholdConfig,
+    private readonly recordModifySharedService: RecordModifySharedService,
+    private readonly tableDomainQueryService: TableDomainQueryService,
+    private readonly fieldService: FieldService,
+    private readonly cls: ClsService<IClsStore>,
+    private readonly eventEmitterService: EventEmitterService
   ) {}
 
+  @retryOnDeadlock()
   async multipleCreateRecords(
     tableId: string,
-    createRecordsRo: ICreateRecordsRo
+    createRecordsRo: ICreateRecordsRo,
+    ignoreMissingFields: boolean = false,
+    isAiInternal?: string
   ): Promise<ICreateRecordsVo> {
-    return await this.prismaService.$tx(async () => {
-      return await this.createRecords(tableId, createRecordsRo);
-    });
+    const res = await this.prismaService.$tx(
+      async () =>
+        this.recordModifyService.multipleCreateRecords(
+          tableId,
+          createRecordsRo,
+          ignoreMissingFields
+        ),
+      { timeout: this.thresholdConfig.bigTransactionTimeout }
+    );
+
+    const appId = this.cls.get('appId');
+    if (appId) {
+      this.cls.set('skipRecordAuditLog', true);
+      await this.recordService.emitRecordAuditLogEvent(
+        CreateRecordAction.AppRecordCreate,
+        tableId,
+        createRecordsRo.records?.length ?? 0,
+        appId
+      );
+    } else if (isAiInternal) {
+      this.cls.set('skipRecordAuditLog', true);
+      this.cls.set('user.id', 'aiRobot');
+      await this.recordService.emitRecordAuditLogEvent(
+        CreateRecordAction.AiRecordCreate,
+        tableId,
+        createRecordsRo.records?.length ?? 0
+      );
+    }
+
+    return res;
   }
 
   /**
@@ -56,255 +105,118 @@ export class RecordOpenApiService {
    */
   async createRecordsOnlySql(tableId: string, createRecordsRo: ICreateRecordsRo): Promise<void> {
     await this.prismaService.$tx(async () => {
-      return await this.createPureRecords(tableId, createRecordsRo);
+      return await this.recordModifyService.createRecordsOnlySql(tableId, createRecordsRo);
     });
-  }
-
-  private async getRecordOrderIndexes(
-    tableId: string,
-    orderRo: IRecordInsertOrderRo,
-    recordCount: number
-  ) {
-    const dbTableName = await this.recordService.getDbTableName(tableId);
-
-    const indexField = await this.viewService.getOrCreateViewIndexField(
-      dbTableName,
-      orderRo.viewId
-    );
-    let indexes: number[] = [];
-    await this.viewOpenApiService.updateRecordOrdersInner({
-      tableId,
-      dbTableName,
-      itemLength: recordCount,
-      indexField,
-      orderRo,
-      update: async (result) => {
-        indexes = result;
-      },
-    });
-
-    return indexes;
   }
 
   async createRecords(
     tableId: string,
-    createRecordsRo: ICreateRecordsRo
+    createRecordsRo: ICreateRecordsRo & { records: IMakeOptional<IRecordInnerRo, 'id'>[] },
+    ignoreMissingFields: boolean = false
   ): Promise<ICreateRecordsVo> {
-    const { fieldKeyType = FieldKeyType.Name, records, typecast, order } = createRecordsRo;
-
-    const typecastRecords = await this.validateFieldsAndTypecast(
-      tableId,
-      records,
-      fieldKeyType,
-      typecast
-    );
-
-    const indexes = order && (await this.getRecordOrderIndexes(tableId, order, records.length));
-    const orderIndex = indexes ? { viewId: order.viewId, indexes } : undefined;
-
-    return await this.recordCalculateService.createRecords(
-      tableId,
-      typecastRecords,
-      fieldKeyType,
-      orderIndex
+    return await this.prismaService.$tx(
+      async () =>
+        this.recordModifyService.multipleCreateRecords(
+          tableId,
+          createRecordsRo,
+          ignoreMissingFields
+        ),
+      { timeout: this.thresholdConfig.bigTransactionTimeout }
     );
   }
 
-  private async createPureRecords(
+  @retryOnDeadlock()
+  async updateRecords(
     tableId: string,
-    createRecordsRo: ICreateRecordsRo
-  ): Promise<void> {
-    const { fieldKeyType = FieldKeyType.Name, records, typecast } = createRecordsRo;
-    const typecastRecords = await this.validateFieldsAndTypecast(
-      tableId,
-      records,
-      fieldKeyType,
-      typecast
-    );
-
-    await this.recordService.createRecordsOnlySql(tableId, typecastRecords);
-  }
-
-  async updateRecords(tableId: string, updateRecordsRo: IUpdateRecordsRo): Promise<IRecord[]> {
-    return await this.prismaService.$tx(async () => {
-      const { order, records } = updateRecordsRo;
-      const recordIds = records.map((record) => record.id);
-      if (order != null) {
-        const { viewId, anchorId, position } = order;
-        await this.viewOpenApiService.updateRecordOrders(tableId, viewId, {
-          anchorId,
-          position,
-          recordIds,
-        });
-      }
-      // validate cellValue and typecast
-      const typecastRecords = await this.validateFieldsAndTypecast(
-        tableId,
-        updateRecordsRo.records,
-        updateRecordsRo.fieldKeyType,
-        updateRecordsRo.typecast
-      );
-
-      await this.recordCalculateService.calculateUpdatedRecord(
-        tableId,
-        updateRecordsRo.fieldKeyType,
-        typecastRecords
-      );
-
-      const snapshots = await this.recordService.getSnapshotBulk(
-        tableId,
-        recordIds,
-        undefined,
-        updateRecordsRo.fieldKeyType
-      );
-
-      return snapshots.map((snapshot) => snapshot.data);
-    });
-  }
-
-  private async getEffectFieldInstances(
-    tableId: string,
-    recordsFields: Record<string, unknown>[],
-    fieldKeyType: FieldKeyType = FieldKeyType.Name
+    updateRecordsRo: IUpdateRecordsRo,
+    windowId?: string,
+    isAiInternal?: string
   ) {
-    const fieldIdsOrNamesSet = recordsFields.reduce<Set<string>>((acc, recordFields) => {
-      const fieldIds = Object.keys(recordFields);
-      forEach(fieldIds, (fieldId) => acc.add(fieldId));
-      return acc;
-    }, new Set());
-
-    const usedFieldIdsOrNames = Array.from(fieldIdsOrNamesSet);
-
-    const usedFields = await this.prismaService.txClient().field.findMany({
-      where: {
-        tableId,
-        [fieldKeyType]: { in: usedFieldIdsOrNames },
-        deletedTime: null,
-      },
-    });
-
-    if (usedFields.length !== usedFieldIdsOrNames.length) {
-      const usedSet = new Set(map(usedFields, fieldKeyType));
-      const missedFields = usedFieldIdsOrNames.filter(
-        (fieldIdOrName) => !usedSet.has(fieldIdOrName)
-      );
-      throw new NotFoundException(`Field ${fieldKeyType}: ${missedFields.join()} not found`);
-    }
-    return map(usedFields, createFieldInstanceByRaw);
-  }
-
-  async validateFieldsAndTypecast<
-    T extends {
-      fields: Record<string, unknown>;
-    },
-  >(
-    tableId: string,
-    records: T[],
-    fieldKeyType: FieldKeyType = FieldKeyType.Name,
-    typecast?: boolean
-  ): Promise<T[]> {
-    const recordsFields = map(records, 'fields');
-    const effectFieldInstance = await this.getEffectFieldInstances(
+    const res = await this.recordModifyService.updateRecords(
       tableId,
-      recordsFields,
-      fieldKeyType
+      updateRecordsRo as IUpdateRecordsInternalRo,
+      windowId
     );
 
-    const newRecordsFields: Record<string, unknown>[] = recordsFields.map(() => ({}));
-    for (const field of effectFieldInstance) {
-      const typeCastAndValidate = new TypeCastAndValidate({
-        services: {
-          prismaService: this.prismaService,
-          fieldConvertingService: this.fieldConvertingService,
-          recordService: this.recordService,
-          attachmentsStorageService: this.attachmentsStorageService,
-          collaboratorService: this.collaboratorService,
-        },
-        field,
+    const appId = this.cls.get('appId');
+    if (appId) {
+      this.cls.set('skipRecordAuditLog', true);
+      await this.recordService.emitRecordAuditLogEvent(
+        UpdateRecordAction.AppRecordUpdate,
         tableId,
-        typecast,
-      });
-      const fieldIdOrName = field[fieldKeyType];
-
-      const cellValues = recordsFields.map((recordFields) => recordFields[fieldIdOrName]);
-
-      const newCellValues = await typeCastAndValidate.typecastCellValuesWithField(cellValues);
-      newRecordsFields.forEach((recordField, i) => {
-        // do not generate undefined field key
-        if (newCellValues[i] !== undefined) {
-          recordField[fieldIdOrName] = newCellValues[i];
-        }
-      });
+        updateRecordsRo.records?.length ?? 0,
+        appId
+      );
+    } else if (isAiInternal) {
+      this.cls.set('skipRecordAuditLog', true);
+      this.cls.set('user.id', 'aiRobot');
+      await this.recordService.emitRecordAuditLogEvent(
+        UpdateRecordAction.AiRecordUpdate,
+        tableId,
+        updateRecordsRo.records?.length ?? 0
+      );
     }
 
-    return records.map((record, i) => ({
-      ...record,
-      fields: newRecordsFields[i],
-    }));
+    return res;
+  }
+
+  async simpleUpdateRecords(tableId: string, updateRecordsRo: IUpdateRecordsRo) {
+    return await this.recordModifyService.simpleUpdateRecords(
+      tableId,
+      updateRecordsRo as IUpdateRecordsInternalRo
+    );
   }
 
   async updateRecord(
     tableId: string,
     recordId: string,
-    updateRecordRo: IUpdateRecordRo
+    updateRecordRo: IUpdateRecordRo,
+    windowId?: string,
+    isAiInternal?: string
   ): Promise<IRecord> {
-    return await this.prismaService.$tx(async () => {
-      const { order, ...recordRo } = updateRecordRo;
-      if (order != null) {
-        const { viewId, anchorId, position } = order;
-        await this.viewOpenApiService.updateRecordOrders(tableId, viewId, {
-          anchorId,
-          position,
-          recordIds: [recordId],
-        });
-      }
+    await this.updateRecords(
+      tableId,
+      {
+        ...updateRecordRo,
+        records: [{ id: recordId, fields: updateRecordRo.record.fields }],
+      },
+      windowId,
+      isAiInternal
+    );
 
-      const { fieldKeyType = FieldKeyType.Name, typecast, record } = recordRo;
+    const snapshots = await this.recordService.getSnapshotBulkWithPermission(
+      tableId,
+      [recordId],
+      undefined,
+      updateRecordRo.fieldKeyType || FieldKeyType.Name,
+      undefined,
+      true
+    );
 
-      const typecastRecords = await this.validateFieldsAndTypecast(
-        tableId,
-        [{ id: recordId, fields: record.fields }],
-        fieldKeyType,
-        typecast
-      );
+    if (snapshots.length !== 1) {
+      throw new CustomHttpException('update record failed', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.record.updateFailed',
+        },
+      });
+    }
 
-      await this.recordCalculateService.calculateUpdatedRecord(
-        tableId,
-        fieldKeyType,
-        typecastRecords
-      );
-
-      // return record result
-      const snapshots = await this.recordService.getSnapshotBulk(
-        tableId,
-        [recordId],
-        undefined,
-        fieldKeyType
-      );
-
-      if (snapshots.length !== 1) {
-        throw new Error('update record failed');
-      }
-      return snapshots[0].data;
-    });
+    return snapshots[0].data;
   }
 
-  async deleteRecord(tableId: string, recordId: string) {
-    return this.deleteRecords(tableId, [recordId]);
+  async deleteRecord(tableId: string, recordId: string, windowId?: string) {
+    return this.recordModifyService.deleteRecord(tableId, recordId, windowId);
   }
 
-  async deleteRecords(tableId: string, recordIds: string[]) {
-    return await this.prismaService.$tx(async () => {
-      await this.recordCalculateService.calculateDeletedRecord(tableId, recordIds);
-
-      await this.recordService.batchDeleteRecords(tableId, recordIds);
-    });
+  async deleteRecords(tableId: string, recordIds: string[], windowId?: string) {
+    return this.recordModifyService.deleteRecords(tableId, recordIds, windowId);
   }
 
   async getRecordHistory(
     tableId: string,
     recordId: string | undefined,
-    query: IGetRecordHistoryQuery
+    query: IGetRecordHistoryQuery,
+    projectionIds?: string[]
   ): Promise<IRecordHistoryVo> {
     const { cursor, startDate, endDate } = query;
     const limit = 20;
@@ -322,6 +234,7 @@ export class RecordOpenApiService {
         tableId,
         ...(recordId ? { recordId } : {}),
         ...(Object.keys(dateFilter).length > 0 ? { createdTime: dateFilter } : {}),
+        ...(projectionIds?.length ? { fieldId: { in: projectionIds } } : {}),
       },
       select: {
         id: true,
@@ -402,7 +315,7 @@ export class RecordOpenApiService {
       const { avatar } = user;
       return {
         ...user,
-        avatar: avatar && getFullStorageUrl(StorageAdapter.getBucket(UploadType.Avatar), avatar),
+        avatar: avatar && getPublicFullStorageUrl(avatar),
       };
     });
 
@@ -411,5 +324,343 @@ export class RecordOpenApiService {
       userMap: keyBy(handledUserList, 'id'),
       nextCursor,
     };
+  }
+
+  private async getValidateAttachmentRecord(tableId: string, recordId: string, fieldId: string) {
+    const field = await this.prismaService
+      .txClient()
+      .field.findFirstOrThrow({
+        where: {
+          id: fieldId,
+          deletedTime: null,
+        },
+        select: {
+          id: true,
+          type: true,
+          isComputed: true,
+        },
+      })
+      .catch(() => {
+        throw new CustomHttpException(`Field ${fieldId} not found`, HttpErrorCode.NOT_FOUND, {
+          localization: {
+            i18nKey: 'httpErrors.field.notFound',
+          },
+        });
+      });
+
+    if (field.type !== FieldType.Attachment) {
+      throw new CustomHttpException('Field is not an attachment', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.field.notAttachment',
+        },
+      });
+    }
+
+    if (field.isComputed) {
+      throw new CustomHttpException('Field is computed', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.field.isComputed',
+        },
+      });
+    }
+
+    const recordData = await this.recordService.getRecordsById(tableId, [recordId]);
+    const record = recordData.records[0];
+    if (!record) {
+      throw new CustomHttpException(`Record ${recordId} not found`, HttpErrorCode.NOT_FOUND, {
+        localization: {
+          i18nKey: 'httpErrors.record.notFound',
+        },
+      });
+    }
+    return record;
+  }
+
+  async uploadAttachment(
+    tableId: string,
+    recordId: string,
+    fieldId: string,
+    file?: Express.Multer.File,
+    fileUrl?: string
+  ) {
+    if (!file && !fileUrl) {
+      throw new CustomHttpException('No file or URL provided', HttpErrorCode.VALIDATION_ERROR, {
+        localization: {
+          i18nKey: 'httpErrors.record.noFileOrUrlProvided',
+        },
+      });
+    }
+
+    const record = await this.getValidateAttachmentRecord(tableId, recordId, fieldId);
+
+    const attachmentItem = file
+      ? await this.attachmentsService.uploadFile(file)
+      : await this.attachmentsService.uploadFromUrl(fileUrl as string);
+
+    // Update the cell value
+    const updateRecordRo: IUpdateRecordRo = {
+      fieldKeyType: FieldKeyType.Id,
+      record: {
+        fields: {
+          [fieldId]: ((record.fields[fieldId] || []) as IAttachmentItem[]).concat(attachmentItem),
+        },
+      },
+    };
+
+    return await this.updateRecord(tableId, recordId, updateRecordRo);
+  }
+
+  async insertAttachment(
+    tableId: string,
+    recordId: string,
+    fieldId: string,
+    attachments: IAttachmentItem[],
+    anchorId?: string
+  ) {
+    if (!attachments.length) {
+      throw new CustomHttpException('No attachments provided', HttpErrorCode.VALIDATION_ERROR);
+    }
+
+    const record = await this.getValidateAttachmentRecord(tableId, recordId, fieldId);
+
+    // Fetch full attachment data for each attachment item from database
+
+    const current = (record.fields[fieldId] || []) as IAttachmentItem[];
+    const anchorIndex = anchorId ? current.findIndex((item) => item.id === anchorId) : -1;
+    const next =
+      anchorIndex >= 0
+        ? [...current.slice(0, anchorIndex + 1), ...attachments, ...current.slice(anchorIndex + 1)]
+        : current.concat(attachments);
+
+    const updateRecordRo: IUpdateRecordRo = {
+      fieldKeyType: FieldKeyType.Id,
+      record: {
+        fields: {
+          [fieldId]: next,
+        },
+      },
+    };
+
+    return await this.updateRecord(tableId, recordId, updateRecordRo);
+  }
+
+  async duplicateRecord(
+    tableId: string,
+    recordId: string,
+    order?: IRecordInsertOrderRo,
+    projection?: string[]
+  ) {
+    const query = { fieldKeyType: FieldKeyType.Id, projection };
+    const result = await this.recordService.getRecord(tableId, recordId, query);
+    const records = { fields: result.fields };
+    const createRecordsRo = {
+      fieldKeyType: FieldKeyType.Id,
+      order,
+      records: [records],
+    };
+    return await this.prismaService
+      .$tx(async () => this.createRecords(tableId, createRecordsRo))
+      .then((res) => {
+        return res.records[0];
+      });
+  }
+
+  async buttonClick(tableId: string, recordId: string, fieldId: string) {
+    const fieldRaw = await this.prismaService.txClient().field.findFirstOrThrow({
+      where: {
+        id: fieldId,
+        type: FieldType.Button,
+        deletedTime: null,
+      },
+    });
+
+    const fieldInstance = createFieldInstanceByRaw(fieldRaw);
+    const options = fieldInstance.options as IButtonFieldOptions;
+    const isActive = options.workflow && options.workflow.id && options.workflow.isActive;
+    if (!isActive) {
+      throw new CustomHttpException(
+        `Button field's workflow ${options.workflow?.id} is not active`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.workflow.notActive',
+          },
+        }
+      );
+    }
+
+    const maxCount = options.maxCount || 0;
+    const record = await this.recordService.getRecord(tableId, recordId, {
+      fieldKeyType: FieldKeyType.Id,
+    });
+
+    const fieldValue = record.fields[fieldId] as IButtonFieldCellValue;
+    const count = fieldValue?.count || 0;
+    if (maxCount > 0 && count >= maxCount) {
+      throw new CustomHttpException(
+        `Button click count ${count} reached max count ${maxCount}`,
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.field.button.clickCountReachedMaxCount',
+          },
+        }
+      );
+    }
+    const updatedRecord: IRecord = await this.updateRecord(tableId, recordId, {
+      record: {
+        fields: { [fieldId]: { count: count + 1 } },
+      },
+      fieldKeyType: FieldKeyType.Id,
+    });
+    updatedRecord.fields = pick(updatedRecord.fields, [fieldId]);
+
+    return {
+      tableId,
+      fieldId,
+      record: updatedRecord,
+    };
+  }
+
+  async resetButton(tableId: string, recordId: string, fieldId: string) {
+    const fieldRaw = await this.prismaService.txClient().field.findFirstOrThrow({
+      where: {
+        id: fieldId,
+        type: FieldType.Button,
+        deletedTime: null,
+      },
+    });
+
+    const fieldInstance = createFieldInstanceByRaw(fieldRaw);
+    const fieldOptions = fieldInstance.options as IButtonFieldOptions;
+    if (!fieldOptions.resetCount) {
+      throw new CustomHttpException(
+        'Button field does not support reset',
+        HttpErrorCode.VALIDATION_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.field.button.notSupportReset',
+          },
+        }
+      );
+    }
+
+    return await this.updateRecord(tableId, recordId, {
+      fieldKeyType: FieldKeyType.Id,
+      record: {
+        fields: {
+          [fieldId]: null,
+        },
+      },
+    });
+  }
+
+  public async validateFieldsAndTypecast<
+    T extends {
+      fields: Record<string, unknown>;
+    },
+  >(
+    tableId: string,
+    records: T[],
+    fieldKeyType: FieldKeyType = FieldKeyType.Name,
+    typecast: boolean = false,
+    ignoreMissingFields: boolean = false
+  ) {
+    const table = await this.tableDomainQueryService.getTableDomainById(tableId);
+    return this.recordModifySharedService.validateFieldsAndTypecast(
+      table,
+      records,
+      fieldKeyType,
+      typecast,
+      ignoreMissingFields
+    );
+  }
+
+  async formSubmit(
+    tableId: string,
+    formSubmitRo: IFormSubmitRo,
+    options?: { includeHiddenField?: boolean }
+  ): Promise<IRecord> {
+    const { viewId, fields, typecast } = formSubmitRo;
+    const { includeHiddenField = false } = options ?? {};
+
+    // 1. Validate view exists and is Form type
+    await this.prismaService.view
+      .findFirstOrThrow({
+        where: { id: viewId, tableId, deletedTime: null, type: ViewType.Form },
+      })
+      .catch(() => {
+        throw new CustomHttpException('View is not a form', HttpErrorCode.RESTRICTED_RESOURCE, {
+          localization: {
+            i18nKey: 'httpErrors.share.viewTypeNotAllowed',
+          },
+        });
+      });
+
+    // 2. Check field visibility - only allow submission of visible fields
+    const visibleFields = await this.fieldService.getFieldsByQuery(tableId, {
+      viewId,
+      filterHidden: !includeHiddenField,
+    });
+    const visibleFieldIdSet = new Set(visibleFields.map(({ id }) => id));
+
+    if (
+      (!visibleFields.length && !isEmpty(fields)) ||
+      Object.keys(fields).some((fieldId) => !visibleFieldIdSet.has(fieldId))
+    ) {
+      throw new CustomHttpException(
+        'The form contains hidden fields, submission not allowed.',
+        HttpErrorCode.RESTRICTED_RESOURCE,
+        {
+          localization: {
+            i18nKey: 'httpErrors.share.hiddenFieldsSubmissionNotAllowed',
+          },
+        }
+      );
+    }
+
+    // 3. Create record with form entry context
+    const { records } = await this.prismaService.$tx(async () => {
+      this.cls.set('entry', { type: 'form', id: viewId });
+      this.cls.set('skipRecordAuditLog', true);
+      return this.createRecords(tableId, {
+        records: [{ fields }],
+        fieldKeyType: FieldKeyType.Id,
+        typecast,
+      });
+    });
+
+    // 4. Emit form audit log
+    await this.emitFormAuditLog(tableId, records.length);
+
+    // 5. Validate record creation
+    if (records.length === 0) {
+      throw new CustomHttpException(
+        'The number of successful submit records is 0',
+        HttpErrorCode.INTERNAL_SERVER_ERROR,
+        {
+          localization: {
+            i18nKey: 'httpErrors.share.submitRecordsError',
+          },
+        }
+      );
+    }
+
+    return records[0];
+  }
+
+  private async emitFormAuditLog(tableId: string, length: number) {
+    const userId = this.cls.get('user.id');
+    const origin = this.cls.get('origin');
+
+    await this.cls.run(async () => {
+      this.cls.set('user.id', userId);
+      this.cls.set('origin', origin!);
+      await this.eventEmitterService.emitAsync(Events.TABLE_RECORD_CREATE_RELATIVE, {
+        action: CreateRecordAction.FormSubmit,
+        resourceId: tableId,
+        recordCount: length,
+      });
+    });
   }
 }

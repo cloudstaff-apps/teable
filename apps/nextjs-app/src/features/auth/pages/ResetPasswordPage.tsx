@@ -1,12 +1,13 @@
 import { useMutation } from '@tanstack/react-query';
-import { resetPassword } from '@teable/openapi';
-import { passwordSchema } from '@teable/openapi/src/auth/types';
+import { type HttpError } from '@teable/core';
+import { resetPassword, passwordSchema } from '@teable/openapi';
 import { Spin, Error } from '@teable/ui-lib/base';
-import { Button, Input, Label, Separator, useToast } from '@teable/ui-lib/shadcn';
+import { Button, Input, Label, Separator } from '@teable/ui-lib/shadcn';
+import { toast } from '@teable/ui-lib/shadcn/ui/sonner';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
-import { fromZodError } from 'zod-validation-error';
+import { useAutoFavicon } from '@/features/app/hooks/useAutoFavicon';
 import { authConfig } from '@/features/i18n/auth.config';
 import { LayoutMain } from '../components/LayoutMain';
 
@@ -16,22 +17,24 @@ export const ResetPasswordPage = () => {
   const router = useRouter();
   const code = router.query.code as string;
   const { t } = useTranslation(authConfig.i18nNamespaces);
-  const { toast } = useToast();
+  useAutoFavicon();
 
   const {
     mutate: resetPasswordMutate,
-    isLoading,
+    isPending: isLoading,
     isSuccess,
   } = useMutation({
     mutationFn: resetPassword,
     onSuccess: () => {
-      toast({
-        title: t('auth:resetPassword.success.title'),
+      toast.success(t('auth:resetPassword.success.title'), {
         description: t('auth:resetPassword.success.description'),
       });
       setTimeout(() => {
         router.push('/auth/login');
       }, 2000);
+    },
+    onError: (err: HttpError) => {
+      setError(err.message);
     },
   });
 
@@ -48,7 +51,7 @@ export const ResetPasswordPage = () => {
     }
     const res = passwordSchema.safeParse(value);
     if (!res.success) {
-      return setError(fromZodError(res.error).message);
+      return setError(t('common:password.setInvalid'));
     }
   };
 

@@ -1,15 +1,15 @@
 /* eslint-disable jsx-a11y/no-autofocus */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasPermission } from '@teable/core';
-import { Edit } from '@teable/icons';
-import { deleteSpace, getSpaceById, updateSpace } from '@teable/openapi';
+import { deleteSpace, getSpaceById, permanentDeleteSpace, updateSpace } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
-import { ConfirmDialog } from '@teable/ui-lib/base';
 import { Button, Input } from '@teable/ui-lib/shadcn';
 import { useRouter } from 'next/router';
-import { Trans, useTranslation } from 'next-i18next';
+import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
 import { CopyButton } from '@/features/app/components/CopyButton';
+import { DeleteSpaceConfirm } from '@/features/app/components/space/DeleteSpaceConfirm';
+import { SpaceSettingContainer } from '@/features/app/components/SpaceSettingContainer';
 import { spaceConfig } from '@/features/i18n/space.config';
 
 export const GeneralPage = () => {
@@ -28,12 +28,20 @@ export const GeneralPage = () => {
   const { mutateAsync: updateSpaceMutator } = useMutation({
     mutationFn: updateSpace,
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ReactQueryKeys.spaceList() });
       queryClient.invalidateQueries({ queryKey: ReactQueryKeys.space(spaceId) });
     },
   });
 
   const { mutate: deleteSpaceMutator } = useMutation({
     mutationFn: deleteSpace,
+    onSuccess: () => {
+      router.push('/space');
+    },
+  });
+
+  const { mutate: permanentDeleteSpaceMutator } = useMutation({
+    mutationFn: permanentDeleteSpace,
     onSuccess: () => {
       router.push('/space');
     },
@@ -67,73 +75,87 @@ export const GeneralPage = () => {
 
   return (
     <>
-      <div className="h-screen w-full overflow-y-auto overflow-x-hidden">
-        <div className="w-full px-8 py-6">
-          <div className="border-b pb-4">
-            <h1 className="text-3xl font-semibold">{t('space:spaceSetting.general')}</h1>
-            {space && hasPermission(space.role, 'space|delete') && (
-              <div className="mt-3 text-sm text-slate-500">
-                {t('space:spaceSetting.generalDescription')}
+      <SpaceSettingContainer
+        title={t('space:spaceSetting.general')}
+        description={t('space:spaceSetting.generalDescription')}
+      >
+        {!!space && (
+          <div className="flex h-full flex-col justify-between">
+            <div className="flex flex-col gap-y-4">
+              {/* Avatar */}
+              <div className="flex size-14 items-center justify-center rounded-md border text-2xl font-medium">
+                {space.name.charAt(0).toUpperCase()}
               </div>
-            )}
-          </div>
 
-          {!!space && (
-            <div className="flex flex-col gap-y-2 py-4">
-              <div className="flex justify-between">
-                <h2 className="mb-2 text-xl font-semibold">{t('common:noun.space')}</h2>
-                <Button variant="destructive" size="sm" onClick={() => setDeleteConfirm(true)}>
-                  {t('actions.delete')}
-                </Button>
-              </div>
-              <div className="flex h-8 items-center gap-x-1 text-sm">
-                <span className="w-24 text-gray-500">{t('space:spaceSetting.spaceName')}</span>
+              {/* Space name */}
+              <div className="flex max-w-sm flex-col gap-y-1 overflow-visible">
+                <label className="text-sm font-medium">{t('space:spaceSetting.spaceName')}</label>
                 {isEditing ? (
                   <Input
                     defaultValue={space.name}
                     onBlur={onBlur}
                     onKeyDown={onKeydown}
                     autoFocus
-                    className="h-8"
+                    size="lg"
+                    className="px-3"
                   />
                 ) : (
-                  <>
-                    <span>{space.name}</span>
-                    {hasPermission(space.role, 'space|update') && (
-                      <Button variant="ghost" size="xs" onClick={() => setIsEditing(true)}>
-                        <Edit className="size-4 cursor-pointer text-gray-500" />
-                      </Button>
-                    )}
-                  </>
+                  <Input
+                    value={space.name}
+                    readOnly
+                    onClick={() => hasPermission(space.role, 'space|update') && setIsEditing(true)}
+                    size="lg"
+                    className={`px-3 ${hasPermission(space.role, 'space|update') ? 'cursor-pointer' : 'cursor-default'}`}
+                  />
                 )}
               </div>
-              <div className="flex h-8 items-center gap-x-1 text-sm">
-                <span className="w-24 text-gray-500">{t('space:spaceSetting.spaceId')}</span>
-                <span>{spaceId}</span>
-                <CopyButton
-                  variant="ghost"
-                  text={spaceId}
-                  size="xs"
-                  iconClassName="size-4 text-gray-500"
-                />
+
+              {/* Space ID */}
+              <div className="flex max-w-sm flex-col gap-y-1">
+                <label className="text-sm font-medium">{t('space:spaceSetting.spaceId')}</label>
+                <div className="relative">
+                  <Input
+                    value={spaceId}
+                    readOnly
+                    tabIndex={-1}
+                    size="lg"
+                    className="cursor-default px-3 pr-10"
+                  />
+                  <CopyButton
+                    variant="ghost"
+                    text={spaceId}
+                    size="xs"
+                    iconClassName="size-4"
+                    className="absolute right-1 top-1/2 -translate-y-1/2"
+                  />
+                </div>
               </div>
             </div>
-          )}
-        </div>
-      </div>
-      <ConfirmDialog
-        open={deleteConfirm}
-        onOpenChange={setDeleteConfirm}
-        title={
-          <Trans ns="space" i18nKey={'tip.delete'}>
-            {space?.name}
-          </Trans>
-        }
-        cancelText={t('actions.cancel')}
-        confirmText={t('actions.confirm')}
-        onCancel={() => setDeleteConfirm(false)}
-        onConfirm={() => space && deleteSpaceMutator(space.id)}
-      />
+
+            {/* Delete space button */}
+            {hasPermission(space.role, 'space|delete') && (
+              <Button
+                variant="outline"
+                className="w-fit text-destructive hover:text-destructive/80"
+                onClick={() => setDeleteConfirm(true)}
+              >
+                {t('space:deleteSpaceModal.title')}
+              </Button>
+            )}
+          </div>
+        )}
+      </SpaceSettingContainer>
+
+      {space && (
+        <DeleteSpaceConfirm
+          open={deleteConfirm}
+          onOpenChange={setDeleteConfirm}
+          spaceId={space.id}
+          spaceName={space.name}
+          onConfirm={() => deleteSpaceMutator(space.id)}
+          onPermanentConfirm={() => permanentDeleteSpaceMutator(space.id)}
+        />
+      )}
     </>
   );
 };

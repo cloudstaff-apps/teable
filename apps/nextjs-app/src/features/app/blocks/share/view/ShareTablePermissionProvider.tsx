@@ -1,3 +1,4 @@
+import type { ITablePermissionVo } from '@teable/openapi';
 import {
   TablePermissionContext,
   TablePermissionContextDefaultValue,
@@ -14,20 +15,11 @@ export const ShareTablePermissionProvider = ({ children }: { children: React.Rea
     return {
       ...TablePermissionContextDefaultValue,
       field: {
-        create: false,
-        fields: fieldIds.reduce(
-          (acc, fieldId) => {
-            acc[fieldId] = {
-              'field|read': true,
-            };
-            return acc;
-          },
-          {} as Record<string, Record<string, boolean>>
-        ),
+        'field|read': true,
       },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(fieldIds)]);
+  }, [JSON.stringify(fieldIds)]) as ITablePermissionVo;
 
   return (
     <TablePermissionContext.Provider value={value}>{children}</TablePermissionContext.Provider>

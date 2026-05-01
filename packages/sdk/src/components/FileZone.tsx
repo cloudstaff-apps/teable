@@ -1,9 +1,8 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 import { cn } from '@teable/ui-lib';
-import { debounce } from 'lodash';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useDrop, useDropArea } from 'react-use';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from '../context/app/i18n';
+import { useDragFile } from './upload/useDragFile';
 
 type IAction = 'paste' | 'drop' | 'click';
 
@@ -12,7 +11,7 @@ interface IFileZoneProps {
   disabled?: boolean;
   children?: React.ReactNode;
   className?: string;
-  defaultText?: string;
+  defaultText?: string | React.ReactNode;
   action?: IAction | IAction[];
   fileInputProps?: React.InputHTMLAttributes<HTMLInputElement>;
 }
@@ -32,29 +31,23 @@ export const FileZone = (props: IFileZoneProps) => {
     defaultText = 'File upload',
   } = props;
   const actions = useMemo(() => (Array.isArray(action) ? action : [action]), [action]);
-
-  const { over: hasOver } = useDrop();
-  const [bound, { over }] = useDropArea({
-    onFiles: (files, event) => {
-      if (actions.includes('drop') && event.type === 'drop') onChange?.(files);
-      if (actions.includes('paste') && event.type === 'paste') onChange?.(files);
+  const { over, bound, dragFileEnter } = useDragFile({
+    event: {
+      onDrop: (files: File[]) => {
+        if (actions.includes('drop')) onChange?.(files);
+      },
+      onPaste: (files: File[]) => {
+        if (actions.includes('paste')) onChange?.(files);
+      },
     },
   });
-  const [dragFileEnter, setDragFileEnter] = useState<boolean>(false);
+
   const fileInput = useRef<HTMLInputElement>(null);
-
-  const updateDragFileEnter = useMemo(() => {
-    return debounce(setDragFileEnter, 30);
-  }, []);
-
-  useEffect(() => {
-    updateDragFileEnter(hasOver);
-  }, [updateDragFileEnter, hasOver]);
 
   if (!dragFileEnter && children) {
     return (
       <div
-        className={cn('min-h-full cursor-default', className)}
+        className={cn('min-h-full cursor-default p-[1px]', className)}
         tabIndex={0}
         role="button"
         {...bound}

@@ -13,13 +13,13 @@ export const DefaultTrigger = (props: IFilterLinkProps) => {
 
   const { context } = useContext(FilterLinkContext);
 
-  const values = typeof value === 'string' ? [value] : value;
+  const values = typeof value === 'string' ? [value] : Array.isArray(value) ? value : [];
   const recordMap = context?.data?.find((item) => item.tableId === foreignTableId)?.data;
 
   return context?.isLoading ? (
     <Spin className="size-4" />
-  ) : value ? (
-    values?.map((id) => (
+  ) : values.length ? (
+    values.map((id) => (
       <SelectTag
         className="flex items-center"
         key={id}
@@ -31,6 +31,8 @@ export const DefaultTrigger = (props: IFilterLinkProps) => {
       />
     ))
   ) : (
-    t('common.selectPlaceHolder')
+    <span className="text-sm font-normal text-muted-foreground">
+      {t('common.selectPlaceHolder')}
+    </span>
   );
 };

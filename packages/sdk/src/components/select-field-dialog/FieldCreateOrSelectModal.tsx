@@ -1,6 +1,6 @@
-import { createFieldRoSchema, getUniqName } from '@teable/core';
-import type { IFieldVo, FieldType, IFieldRo } from '@teable/core';
-import { ArrowLeft, Plus } from '@teable/icons';
+import { createFieldRoSchema, FieldType } from '@teable/core';
+import type { IFieldVo, IFieldRo } from '@teable/core';
+import { ArrowLeft } from '@teable/icons';
 import {
   Button,
   Dialog,
@@ -20,18 +20,15 @@ import {
 import type { ReactNode } from 'react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { useTranslation } from '../../context/app/i18n';
-import { useFieldStaticGetter, useFields, useTableId } from '../../hooks';
+import { useFieldOperations, useFieldStaticGetter, useFields, useTableId } from '../../hooks';
 import type { IFieldInstance } from '../../model';
-import { Field } from '../../model';
 import { FieldCreator } from './FieldCreator';
 
 interface IFieldCreateOrSelectModalProps {
   title: ReactNode;
   content?: ReactNode;
   description?: ReactNode;
-  fieldTypes: FieldType[];
   selectedFieldId?: string;
-  isMultipleEnable?: boolean;
   isCreatable?: boolean;
   getCreateBtnText: (fieldName: string) => ReactNode;
   children: (isActive: boolean) => React.ReactNode;
@@ -49,18 +46,15 @@ export const FieldCreateOrSelectModal = forwardRef<
 >((props, forwardRef) => {
   const {
     title,
-    content,
     description,
-    fieldTypes,
+    content,
     selectedFieldId: _selectedFieldId,
-    isMultipleEnable,
-    isCreatable,
     children,
     onConfirm,
-    getCreateBtnText,
   } = props;
   const tableId = useTableId();
   const totalFields = useFields({ withHidden: true, withDenied: true });
+  const { createField } = useFieldOperations();
   const getFieldStatic = useFieldStaticGetter();
   const [newField, setNewField] = useState<IFieldRo>();
   const { t } = useTranslation();
@@ -76,24 +70,6 @@ export const FieldCreateOrSelectModal = forwardRef<
     setSelectedFieldId(_selectedFieldId);
   }, [_selectedFieldId]);
 
-  const filteredFields = useMemo(() => {
-    return totalFields.filter(({ type, isMultipleCellValue }) => {
-      if (isMultipleEnable) {
-        return fieldTypes.includes(type);
-      }
-      return !isMultipleCellValue && fieldTypes.includes(type);
-    });
-  }, [fieldTypes, totalFields, isMultipleEnable]);
-
-  const onNewFieldEdit = (field: IFieldRo) => {
-    const { name: originName } = field;
-    const allExistNames = totalFields.map(({ name }) => name);
-    const name = getUniqName(originName as string, allExistNames);
-
-    setNewField({ ...field, name });
-    setSelectedFieldId(undefined);
-  };
-
   const onFieldSelect = (value: string) => {
     setSelectedFieldId(value);
   };
@@ -103,7 +79,7 @@ export const FieldCreateOrSelectModal = forwardRef<
       if (tableId == null) return setNewField(undefined);
       const result = createFieldRoSchema.safeParse(newField);
       if (result.success) {
-        const field = (await Field.createField(tableId, newField)).data;
+        const field = await createField({ tableId, fieldRo: newField });
         setNewField(undefined);
         return onConfirm?.(field);
       }
@@ -114,6 +90,16 @@ export const FieldCreateOrSelectModal = forwardRef<
       return selectedField ? onConfirm?.(selectedField) : undefined;
     }
   };
+
+  const filteredFields = useMemo(() => {
+    return totalFields.filter((field) => {
+      const { type } = field;
+      if (type === FieldType.Attachment || type === FieldType.Button) {
+        return false;
+      }
+      return true;
+    });
+  }, [totalFields]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -129,15 +115,20 @@ export const FieldCreateOrSelectModal = forwardRef<
           {description && <DialogDescription className="text-xs">{description}</DialogDescription>}
         </DialogHeader>
 
-        <ScrollArea className="h-36 w-full" type="always">
-          <div className="px-2">
+        <div className="rounded-md bg-muted p-4 pr-0">
+          <ScrollArea className="h-52 w-full" type="always">
             {newField ? (
               <FieldCreator field={newField} setField={setNewField} />
             ) : (
               <RadioGroup className="gap-4" value={selectedFieldId} onValueChange={onFieldSelect}>
                 {filteredFields.map((field) => {
-                  const { id, type, name, isLookup } = field;
-                  const { Icon } = getFieldStatic(type, isLookup);
+                  const { id, type, name, isLookup, aiConfig, canReadFieldRecord } = field;
+                  const { Icon } = getFieldStatic(type, {
+                    isLookup,
+                    isConditionalLookup: field.isConditionalLookup,
+                    hasAiConfig: Boolean(aiConfig),
+                    deniedReadRecord: !canReadFieldRecord,
+                  });
                   return (
                     <div key={id} className="flex items-center space-x-2">
                       <RadioGroupItem value={id} id={id} />
@@ -150,43 +141,15 @@ export const FieldCreateOrSelectModal = forwardRef<
                 })}
               </RadioGroup>
             )}
-          </div>
-        </ScrollArea>
+          </ScrollArea>
+        </div>
 
-        {!newField && (
-          <div className="flex flex-col space-y-2">
-            {fieldTypes.map((type) => {
-              const { title, Icon, defaultOptions } = getFieldStatic(type, false);
-              return (
-                <Button
-                  key={type}
-                  variant="secondary"
-                  className="justify-start"
-                  disabled={!isCreatable}
-                  onClick={() => {
-                    if (!isCreatable) return;
-                    onNewFieldEdit({
-                      type,
-                      name: title,
-                      options: defaultOptions,
-                    } as IFieldRo);
-                  }}
-                >
-                  <Plus className="size-5" />
-                  <Icon className="size-4" />
-                  {getCreateBtnText(title)}
-                </Button>
-              );
-            })}
-          </div>
-        )}
-
-        {!newField && content}
+        {content}
 
         <DialogFooter className={cn(newField && 'justify-between sm:justify-between')}>
           {newField && (
             <Button variant={'ghost'} onClick={() => setNewField(undefined)}>
-              <ArrowLeft />
+              <ArrowLeft className="size-4 shrink-0" />
               {t('common.back')}
             </Button>
           )}

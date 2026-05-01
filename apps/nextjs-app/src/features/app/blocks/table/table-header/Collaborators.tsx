@@ -2,18 +2,9 @@ import { ColorUtils, contractColorForTheme, getCollaboratorsChannel } from '@tea
 import { useTheme } from '@teable/next-themes';
 import type { ICollaboratorUser } from '@teable/sdk';
 import { useSession, CollaboratorWithHoverCard } from '@teable/sdk';
-import { useConnection } from '@teable/sdk/hooks';
-import {
-  cn,
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@teable/ui-lib/shadcn';
+import { useConnection, useTableId } from '@teable/sdk/hooks';
+import { cn, Popover, PopoverContent, PopoverTrigger } from '@teable/ui-lib/shadcn';
 import { chunk, isEmpty } from 'lodash';
-import { useRouter } from 'next/router';
 import React, { useEffect, useMemo, useState } from 'react';
 import type { Presence } from 'sharedb/lib/client';
 
@@ -23,11 +14,11 @@ interface CollaboratorsProps {
 }
 
 export const Collaborators: React.FC<CollaboratorsProps> = ({ className, maxAvatarLen = 3 }) => {
-  const router = useRouter();
   const { connection } = useConnection();
-  const { tableId } = router.query;
+  const tableId = useTableId();
   const { user: sessionUser } = useSession();
   const { resolvedTheme } = useTheme();
+
   const [presence, setPresence] = useState<Presence>();
   const user = useMemo(
     () => ({
@@ -91,56 +82,50 @@ export const Collaborators: React.FC<CollaboratorsProps> = ({ className, maxAvat
 
   return (
     <div className={cn('gap-1 items-center flex', className)}>
-      {boardUsers?.map(({ id, name, avatar, email }, index) => {
-        const borderColor = ColorUtils.getRandomHexFromStr(`${tableId}_${id}`);
-
+      {boardUsers?.map(({ id, name, avatar, email }) => {
+        const borderColor = contractColorForTheme(
+          ColorUtils.getRandomHexFromStr(`${tableId}_${id}`),
+          resolvedTheme
+        );
         return (
-          <HoverCard key={`${id}_${index}`}>
-            <HoverCardTrigger asChild>
-              <div className="relative overflow-hidden">
-                <CollaboratorWithHoverCard
-                  id={id}
-                  name={name}
-                  avatar={avatar}
-                  email={email}
-                  borderColor={contractColorForTheme(borderColor, resolvedTheme)}
-                />
-              </div>
-            </HoverCardTrigger>
-            <HoverCardContent className="flex w-max max-w-[160px] flex-col justify-center truncate p-2 text-sm">
-              <div className="truncate">
-                <span title={name}>{name}</span>
-                <span className="pl-1">{id === user.id ? '(You)' : null}</span>
-              </div>
-              <div className="truncate">
-                <span title={email}>{email}</span>
-              </div>
-            </HoverCardContent>
-          </HoverCard>
+          <CollaboratorWithHoverCard
+            key={id}
+            id={id}
+            name={name}
+            avatar={avatar}
+            email={email}
+            borderColor={borderColor}
+          />
         );
       })}
       {hiddenUser ? (
         <Popover>
           <PopoverTrigger asChild>
-            <div className="relative size-6 shrink-0 grow-0 cursor-pointer select-none overflow-hidden rounded-full border-slate-200">
-              <p className="flex size-full items-center justify-center rounded-full border-2 text-center text-xs">
+            <div className="relative size-6 shrink-0 grow-0 cursor-pointer select-none overflow-hidden rounded-full border hover:bg-accent">
+              <p className="flex size-full items-center justify-center rounded-full text-center text-xs">
                 +{hiddenUser.length}
               </p>
             </div>
           </PopoverTrigger>
-          <PopoverContent className="max-h-64 w-36 overflow-y-auto">
+          <PopoverContent className="flex max-h-64 w-auto min-w-[120px] max-w-60 flex-col gap-1 overflow-y-auto rounded-md p-2">
             {hiddenUser.map(({ id, name, avatar, email }) => {
-              const borderColor = ColorUtils.getRandomHexFromStr(`${tableId}_${id}`);
+              const borderColor = contractColorForTheme(
+                ColorUtils.getRandomHexFromStr(`${tableId}_${id}`),
+                resolvedTheme
+              );
               return (
-                <div key={id} className="flex items-center truncate p-1">
+                <div
+                  key={id}
+                  className="flex items-center gap-2 truncate rounded-sm p-1 hover:bg-accent"
+                >
                   <CollaboratorWithHoverCard
                     id={id}
                     name={name}
                     avatar={avatar}
                     email={email}
-                    borderColor={contractColorForTheme(borderColor, resolvedTheme)}
+                    borderColor={borderColor}
                   />
-                  <div className="flex-1 truncate pl-1">{name}</div>
+                  <div className="flex-1 truncate text-sm">{name}</div>
                 </div>
               );
             })}

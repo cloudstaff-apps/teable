@@ -1,6 +1,6 @@
 import type { IRole } from '@teable/core';
-import type { IGetBaseVo, ICreateTableRo } from '@teable/openapi';
-import { Table } from './table/table';
+import type { IGetBaseVo, ICreateTableRo, CollaboratorType } from '@teable/openapi';
+import { createTable, deleteTable, permanentDeleteTable } from '@teable/openapi';
 
 export class Base implements IGetBaseVo {
   id: string;
@@ -8,25 +8,42 @@ export class Base implements IGetBaseVo {
   spaceId: string;
   icon: string | null;
   role: IRole;
+  collaboratorType?: CollaboratorType;
+  restrictedAuthority?: boolean;
+  enabledAuthority?: boolean;
+  createdBy: string;
+  isCanary?: boolean;
 
   constructor(base: IGetBaseVo) {
-    const { id, name, spaceId, icon, role } = base;
+    const {
+      id,
+      name,
+      spaceId,
+      icon,
+      role,
+      collaboratorType,
+      restrictedAuthority,
+      enabledAuthority,
+      createdBy,
+      isCanary,
+    } = base;
     this.id = id;
     this.name = name;
     this.spaceId = spaceId;
     this.icon = icon;
     this.role = role;
-  }
-
-  async sqlQuery(tableId: string, viewId: string, sql: string) {
-    return Table.sqlQuery(this.id, tableId, { viewId, sql });
+    this.collaboratorType = collaboratorType;
+    this.restrictedAuthority = restrictedAuthority;
+    this.enabledAuthority = enabledAuthority;
+    this.createdBy = createdBy;
+    this.isCanary = isCanary;
   }
 
   async createTable(tableRo?: ICreateTableRo) {
-    return Table.createTable(this.id, tableRo);
+    return createTable(this.id, tableRo);
   }
 
-  async deleteTable(tableId: string) {
-    return Table.deleteTable(this.id, tableId);
+  async deleteTable(tableId: string, permanent?: boolean) {
+    return permanent ? permanentDeleteTable(this.id, tableId) : deleteTable(this.id, tableId);
   }
 }

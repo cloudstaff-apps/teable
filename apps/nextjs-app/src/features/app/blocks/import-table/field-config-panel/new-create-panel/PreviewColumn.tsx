@@ -1,6 +1,6 @@
 import { IMPORT_SUPPORTED_TYPES } from '@teable/core';
 import type { FieldType } from '@teable/core';
-import { Trash, Lock } from '@teable/icons';
+import { Trash2, Lock } from '@teable/icons';
 import type { IImportColumn } from '@teable/openapi';
 import { useFieldStaticGetter } from '@teable/sdk';
 import { BaseSingleSelect } from '@teable/sdk/components/filter/view-filter/component/base/BaseSingleSelect';
@@ -29,7 +29,10 @@ export const PreviewColumn = (props: IPreviewColumnProps) => {
   const candidates = useMemo(
     () =>
       IMPORT_SUPPORTED_TYPES.map<{ value: FieldType; label: string; icon: JSX.Element }>((type) => {
-        const { title, Icon } = getFieldStatic(type, false);
+        const { title, Icon } = getFieldStatic(type, {
+          isLookup: false,
+          hasAiConfig: false,
+        });
         return {
           value: type,
           label: title,
@@ -58,7 +61,6 @@ export const PreviewColumn = (props: IPreviewColumnProps) => {
             <TableCell className="relative min-w-56 font-medium">
               <Input
                 placeholder="fieldName"
-                className="h-8"
                 value={column.name}
                 onChange={(e) => {
                   const newColumns = [...columns];
@@ -69,6 +71,7 @@ export const PreviewColumn = (props: IPreviewColumnProps) => {
             </TableCell>
             <TableCell className="w-full max-w-md">
               <BaseSingleSelect
+                modal
                 className="m-1 w-full"
                 options={candidates}
                 popoverClassName="w-96 truncate"
@@ -99,7 +102,7 @@ export const PreviewColumn = (props: IPreviewColumnProps) => {
                   onChange(newColumns);
                 }}
               >
-                {index === 0 ? <Lock className="size-4" /> : <Trash className="size-4" />}
+                {index === 0 ? <Lock className="size-4" /> : <Trash2 className="size-4" />}
               </Button>
             </TableCell>
           </TableRow>

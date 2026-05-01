@@ -8,7 +8,7 @@ import { getRowCount as apiGetRowCount } from '@teable/openapi';
 import {
   createField,
   createTable,
-  deleteTable,
+  permanentDeleteTable,
   getFields,
   getRecords,
   initApp,
@@ -71,8 +71,8 @@ describe('OpenAPI link Select (e2e)', () => {
     });
 
     afterEach(async () => {
-      await deleteTable(baseId, table1.id);
-      await deleteTable(baseId, table2.id);
+      await permanentDeleteTable(baseId, table1.id);
+      await permanentDeleteTable(baseId, table2.id);
     });
 
     describe.each([
@@ -81,7 +81,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.ManyOne,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 3, s: 1 }, right: { c: 2, s: 1 } },
         ],
         direction: 'two way',
@@ -92,7 +92,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.ManyOne,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 3, s: 1 }, right: { c: 2, s: 1 } },
         ],
         direction: 'one Way',
@@ -103,7 +103,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.OneOne,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
         ],
         direction: 'two way',
@@ -114,7 +114,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.OneOne,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
         ],
         direction: 'one Way',
@@ -126,7 +126,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.ManyMany,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
         ],
         direction: 'two way',
@@ -136,7 +136,7 @@ describe('OpenAPI link Select (e2e)', () => {
         reversRelationship: Relationship.ManyMany,
         result: [
           { left: { c: 3, s: 0 }, right: { c: 3, s: 0 } },
-          { left: { c: 2, s: 1 }, right: { c: 2, s: 1 } },
+          { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
           { left: { c: 3, s: 1 }, right: { c: 3, s: 1 } },
         ],
         isOneWay: true,
@@ -400,7 +400,7 @@ describe('OpenAPI link Select (e2e)', () => {
           filterLinkCellCandidate: [linkField2.id, table2.records[0].id],
         };
         const result0 = await getRecords(table1.id, table1Record0Selected);
-        expect(result0.records.length).toEqual(0);
+        expect(result0.records.length).toEqual(3);
 
         const table1Record1Selected: IGetRecordsRo = {
           fieldKeyType: FieldKeyType.Id,
@@ -408,6 +408,55 @@ describe('OpenAPI link Select (e2e)', () => {
         };
         const result1 = await getRecords(table1.id, table1Record1Selected);
         expect(result1.records.length).toEqual(0);
+      });
+    });
+
+    describe('fetch selected records', () => {
+      let linkField2: IFieldVo;
+      beforeEach(async () => {
+        const Link1FieldRo: IFieldRo = {
+          type: FieldType.Link,
+          options: {
+            relationship: Relationship.ManyOne,
+            foreignTableId: table2.id,
+          },
+        };
+
+        await createField(table1.id, Link1FieldRo);
+
+        const table2Fields = await getFields(table2.id);
+        linkField2 = table2Fields[2];
+      });
+
+      it('should filter records by selected recordIds', async () => {
+        const recordRo: IGetRecordsRo = {
+          fieldKeyType: FieldKeyType.Id,
+          selectedRecordIds: [table1.records[0].id, table1.records[1].id],
+        };
+
+        const result = await getRecords(table1.id, recordRo);
+        expect(result.records.length).toEqual(2);
+
+        const rowCountResult = (await apiGetRowCount(table1.id, recordRo)).data;
+        expect(rowCountResult.rowCount).toBe(2);
+      });
+
+      it('should filter candidate records by selected recordIds', async () => {
+        const updateValue1 = [{ id: table1.records[2].id }];
+
+        await updateRecordByApi(table2.id, table2.records[0].id, linkField2.id, updateValue1);
+
+        const table1Record0Selected: IGetRecordsRo = {
+          fieldKeyType: FieldKeyType.Id,
+          filterLinkCellCandidate: [linkField2.id, table2.records[0].id],
+          selectedRecordIds: [table1.records[1].id],
+        };
+
+        const result = await getRecords(table1.id, table1Record0Selected);
+        expect(result.records.length).toEqual(2);
+
+        const rowCountResult = (await apiGetRowCount(table1.id, table1Record0Selected)).data;
+        expect(rowCountResult.rowCount).toBe(2);
       });
     });
   });

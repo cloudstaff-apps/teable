@@ -6,14 +6,13 @@ import { Spin } from '@teable/ui-lib/base';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
-import { fromZodError } from 'zod-validation-error';
 import { shareConfig } from '@/features/i18n/share.config';
 
 export const AuthPage = () => {
   const [error, setError] = useState('');
   const router = useRouter();
   const shareId = router.query.shareId as string;
-  const { mutateAsync: authShareView, isLoading } = useMutation({
+  const { mutateAsync: authShareView, isPending: isLoading } = useMutation({
     mutationFn: shareViewAuth,
   });
   const { t } = useTranslation(shareConfig.i18nNamespaces);
@@ -23,7 +22,7 @@ export const AuthPage = () => {
     const password = (event.currentTarget.elements.namedItem('password') as HTMLInputElement).value;
     const validatePassword = sharePasswordSchema.safeParse(password);
     if (!validatePassword.success) {
-      setError(fromZodError(validatePassword.error).message);
+      setError(t('share:auth.passwordTooShort'));
       return;
     }
     try {
@@ -34,7 +33,12 @@ export const AuthPage = () => {
       });
     } catch (error) {
       if (error instanceof HttpError) {
-        setError(error.message);
+        const localization = (error.data as { localization?: { i18nKey?: string } })?.localization;
+        if (localization?.i18nKey) {
+          setError(t(`sdk:${localization.i18nKey}` as never));
+        } else {
+          setError(error.message);
+        }
       } else {
         setError(error as string);
       }

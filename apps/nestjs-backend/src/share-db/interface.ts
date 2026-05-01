@@ -15,7 +15,20 @@ export interface IReadonlyAdapterService {
   ): Promise<{ ids: string[]; extra?: unknown }>;
 }
 
-export interface IAdapterService extends IReadonlyAdapterService {
+export interface IShareDbReadonlyAdapterService extends IReadonlyAdapterService {
+  // get current version and type of the document
+  getVersionAndType(
+    collectionId: string,
+    docId: string
+  ): Promise<{ version: number; type: RawOpType }>;
+
+  getVersionAndTypeMap(
+    collectionId: string,
+    docIds: string[]
+  ): Promise<Record<string, { version: number; type: RawOpType }>>;
+}
+
+export interface IAdapterService {
   create(collectionId: string, snapshot: unknown): Promise<void>;
 
   del(version: number, collectionId: string, docId: string): Promise<void>;

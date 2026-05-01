@@ -18,7 +18,8 @@ export type ICopyVo = z.infer<typeof copyVoSchema>;
 export const CopyRoute: RouteConfig = registerRoute({
   method: 'get',
   path: COPY_URL,
-  description: 'Copy operations in tables',
+  summary: 'Copy selected table content',
+  description: 'Copy content from selected table ranges including headers if specified',
   request: {
     params: z.object({
       tableId: z.string(),
@@ -50,6 +51,7 @@ export const copy = async (tableId: string, copyRo: IRangesRo) => {
         orderBy: JSON.stringify(copyRo.orderBy),
         groupBy: JSON.stringify(copyRo.groupBy),
         ranges: JSON.stringify(copyRo.ranges),
+        collapsedGroupIds: JSON.stringify(copyRo.collapsedGroupIds),
       },
     }
   );

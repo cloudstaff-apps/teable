@@ -1,6 +1,6 @@
 import type { INotifyVo, UploadType } from '@teable/openapi';
 import { getSignature, notify } from '@teable/openapi';
-import axios from 'axios';
+import axios, { CanceledError } from 'axios';
 import { noop } from 'lodash';
 
 interface IUploadTask {
@@ -9,6 +9,7 @@ interface IUploadTask {
   progress: number;
   type: UploadType;
   baseId?: string;
+  abortController?: AbortController;
   successCallback: ISuccessCallback;
   errorCallback: IErrorCallback;
   progressCallback: IProgressCallback;
@@ -34,11 +35,37 @@ export enum Status {
 export class AttachmentManager {
   limit: number;
   uploadQueue: IUploadTask[];
+  uploadingQueue: IUploadTask[];
   shareId?: string;
+  onUploadingTaskChange?: (uploadingTasks: IUploadTask[], pendingTasks: IUploadTask[]) => void;
 
-  constructor(limit: number) {
+  constructor(
+    limit: number,
+    options: {
+      onUploadingTaskChange?: (uploadingTasks: IUploadTask[], pendingTasks: IUploadTask[]) => void;
+    } = {}
+  ) {
     this.limit = limit;
     this.uploadQueue = [];
+    this.uploadingQueue = [];
+    this.onUploadingTaskChange = options.onUploadingTaskChange || noop;
+  }
+
+  private notifyUploadingTaskChange() {
+    this.onUploadingTaskChange?.(this.uploadingQueue, this.uploadQueue);
+  }
+
+  private addToUploadingQueue(uploadTask: IUploadTask) {
+    this.uploadingQueue.push(uploadTask);
+    this.notifyUploadingTaskChange();
+  }
+
+  private removeFromUploadingQueue(uploadTask: IUploadTask) {
+    const index = this.uploadingQueue.findIndex((task) => task.file.id === uploadTask.file.id);
+    if (index !== -1) {
+      this.uploadingQueue.splice(index, 1);
+      this.notifyUploadingTaskChange();
+    }
   }
 
   upload(
@@ -65,18 +92,15 @@ export class AttachmentManager {
         errorCallback: errorCallback,
         progressCallback: progressCallback,
       };
-
-      if (this.uploadQueue.length < this.limit) {
-        this.executeUpload(uploadTask);
-      } else {
-        this.uploadQueue.push(uploadTask);
-      }
+      this.uploadQueue.push(uploadTask);
+      this.nextUpload();
     }
   }
 
   async executeUpload(uploadTask: IUploadTask) {
     uploadTask.status = Status.Uploading;
-
+    this.addToUploadingQueue(uploadTask);
+    uploadTask.abortController = new AbortController();
     try {
       const fileInstance = uploadTask.file.instance;
       const res = await getSignature(
@@ -97,6 +121,7 @@ export class AttachmentManager {
       await axios(url, {
         method: uploadMethod,
         data: fileInstance,
+        signal: uploadTask.abortController?.signal,
         onUploadProgress: (progressEvent) => {
           const progress = Math.round((progressEvent.loaded * 100) / (progressEvent.total || 0));
           uploadTask.progress = progress;
@@ -116,18 +141,43 @@ export class AttachmentManager {
       this.completeUpload(uploadTask, notifyRes.data);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      uploadTask.errorCallback(uploadTask.file, undefined, error?.status);
+      // Skip error callback when the upload was intentionally cancelled
+      if (error instanceof CanceledError || error?.name === 'AbortError') {
+        return;
+      }
+      uploadTask.errorCallback(uploadTask.file, error?.message, error?.status);
+    } finally {
+      this.removeFromUploadingQueue(uploadTask);
+      this.nextUpload();
+    }
+  }
+
+  cancelTask(fileId: string) {
+    // 1. from uploadQueue（pending） remove
+    const pendingIdx = this.uploadQueue.findIndex((t) => t.file.id === fileId);
+    if (pendingIdx !== -1) {
+      this.uploadQueue.splice(pendingIdx, 1);
+      return;
+    }
+    // 2. abort the uploading request
+    const uploadingTask = this.uploadingQueue.find((t) => t.file.id === fileId);
+    if (uploadingTask?.abortController) {
+      uploadingTask.abortController.abort();
     }
   }
 
   completeUpload(uploadTask: IUploadTask, attachment: INotifyVo) {
     uploadTask.status = Status.Completed;
     uploadTask.successCallback(uploadTask.file, attachment);
+  }
 
-    // Check if there are pending upload tasks
-    if (this.uploadQueue.length > 0) {
+  nextUpload() {
+    // Start as many uploads as possible up to the limit
+    while (this.uploadingQueue.length < this.limit && this.uploadQueue.length > 0) {
       const nextTask = this.uploadQueue.shift();
-      nextTask && this.executeUpload(nextTask);
+      if (nextTask) {
+        this.executeUpload(nextTask);
+      }
     }
   }
 }

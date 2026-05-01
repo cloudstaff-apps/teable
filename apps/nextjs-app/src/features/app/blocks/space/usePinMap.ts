@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import type { GetPinListVo } from '@teable/openapi';
+import type { IGetPinListVo } from '@teable/openapi';
 import { getPinList } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
+import { useIsReadOnlyPreview } from '@teable/sdk/hooks';
 
 export const usePinMap = () => {
+  const isReadOnlyPreview = useIsReadOnlyPreview();
   const { data: pinListData } = useQuery({
     queryKey: ReactQueryKeys.pinList(),
     queryFn: () => getPinList().then((data) => data.data),
+    enabled: !isReadOnlyPreview,
   });
 
   return pinListData?.reduce(
@@ -14,6 +17,6 @@ export const usePinMap = () => {
       acc[pin.id] = pin;
       return acc;
     },
-    {} as Record<string, GetPinListVo[number]>
+    {} as Record<string, IGetPinListVo[number]>
   );
 };

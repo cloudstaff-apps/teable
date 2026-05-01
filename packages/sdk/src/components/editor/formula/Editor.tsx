@@ -4,43 +4,42 @@ import { defaultKeymap, historyKeymap } from '@codemirror/commands';
 import type { EditorSelection } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import type { FunctionName } from '@teable/core';
-import { FormulaLexer } from '@teable/core';
+import { FieldType } from '@teable/core';
+import { FormulaLexer } from '@teable/formula';
 import { useTheme } from '@teable/next-themes';
-import { Button, cn } from '@teable/ui-lib';
+import type { IFunctionSchema } from '@teable/openapi';
+import { Button, cn, Tabs, TabsContent, TabsList, TabsTrigger } from '@teable/ui-lib';
 import { CharStreams } from 'antlr4ts';
 import Fuse from 'fuse.js';
 import { cloneDeep, keyBy } from 'lodash';
 import type { FC } from 'react';
-import { useRef, useState, useMemo, useCallback } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from '../../../context/app/i18n';
 import { useFieldStaticGetter, useFields } from '../../../hooks';
 import { FormulaField } from '../../../model';
 import type { ICodeEditorRef } from './components';
-import { FunctionGuide, FunctionHelper, CodeEditor } from './components';
+import { AiPromptContainer, CodeEditor, FunctionGuide, FunctionHelper } from './components';
 import {
-  Type2IconMap,
   FOCUS_TOKENS_SET,
-  useFunctionsDisplayMap,
+  Type2IconMap,
   useFormulaFunctionsMap,
+  useFunctionsDisplayMap,
 } from './constants';
 import { THEME_EXTENSIONS, TOKEN_EXTENSIONS, getVariableExtensions } from './extensions';
+import type { IFocusToken, IFuncHelpData, IFunctionCollectionItem } from './interface';
 import { SuggestionItemType } from './interface';
-import type {
-  IFocusToken,
-  IFuncHelpData,
-  IFunctionCollectionItem,
-  IFunctionSchema,
-} from './interface';
 import { FormulaNodePathVisitor } from './visitor';
 
 interface IFormulaEditorProps {
   expression?: string;
   onConfirm?: (expression: string) => void;
+  enableAI?: boolean;
 }
 
 export const FormulaEditor: FC<IFormulaEditorProps> = (props) => {
-  const { expression, onConfirm } = props;
-  const fields = useFields({ withHidden: true, withDenied: true });
+  const { expression, onConfirm, enableAI } = props;
+  const defaultFields = useFields({ withHidden: true, withDenied: true });
+  const fields = defaultFields.filter((field) => field.type !== FieldType.Button);
   const { resolvedTheme } = useTheme();
   const { t } = useTranslation();
   const isLightTheme = resolvedTheme === 'light';
@@ -329,107 +328,139 @@ export const FormulaEditor: FC<IFormulaEditorProps> = (props) => {
     }
   };
 
-  const codeBg = isLightTheme ? 'bg-slate-100' : 'bg-gray-900';
+  const codeBg = isLightTheme
+    ? 'bg-input'
+    : 'bg-[color-mix(in_oklab,white_10%,hsl(var(--background)))]';
 
-  return (
-    <div className="w-[620px]">
-      <div className="flex h-12 w-full items-center justify-between border-b-DEFAULT pl-4 pr-2">
-        <h1 className="text-base">{t('editor.formula.title')}</h1>
-      </div>
-      <div className={cn('flex flex-col w-full border-b-[1px] caret-foreground', codeBg)}>
-        <CodeEditor
-          ref={editorRef}
-          value={expressionByName}
-          extensions={extensions}
-          onChange={onValueChange}
-          onSelectionChange={onSelectionChange}
-        />
-        <div className="h-5 w-full truncate px-2 text-xs text-destructive">{errMsg}</div>
-      </div>
-      <div className="flex h-[52px] w-full items-center justify-between border-b-DEFAULT px-2">
-        <div className="mr-2 flex flex-1 flex-col justify-center overflow-hidden">
-          <FunctionHelper funcHelpData={funcHelpData} />
-        </div>
-        <div>
-          <Button size={'sm'} className="ml-2" onClick={onConfirmInner}>
-            {t('common.confirm')}
-          </Button>
-        </div>
-      </div>
-      <div className="flex h-[360px] w-full">
-        <div ref={listRef} className="w-[200px] shrink-0 overflow-y-auto border-r-DEFAULT">
-          {formatFunctionList.length || filteredFields.length ? (
-            <>
-              {filteredFields.length > 0 && (
-                <div>
-                  <h3 className="text- py-1 pl-2 text-[13px] font-semibold text-slate-500">
-                    {t('functionType.fields')}
-                  </h3>
-                  {filteredFields.map((result, index: number) => {
-                    const { id, name, type, isLookup } = result.item;
-                    const { Icon } = getFieldStatic(type, isLookup);
+  const normalContent = (
+    <div className="flex h-[360px] w-full">
+      <div ref={listRef} className="w-[200px] shrink-0 overflow-y-auto border-r">
+        {formatFunctionList.length || filteredFields.length ? (
+          <>
+            {filteredFields.length > 0 && (
+              <div>
+                <h3 className="text- py-1 pl-2 text-[13px] font-semibold text-muted-foreground">
+                  {t('functionType.fields')}
+                </h3>
+                {filteredFields.map((result, index: number) => {
+                  const { id, name, type, isLookup, aiConfig } = result.item;
+                  const { Icon } = getFieldStatic(type, {
+                    isLookup,
+                    isConditionalLookup: result.item.isConditionalLookup,
+                    hasAiConfig: Boolean(aiConfig),
+                  });
+                  const isSuggestionItem =
+                    suggestionItemType === SuggestionItemType.Field && suggestionItemKey === id;
+                  return (
+                    <div
+                      key={id}
+                      ref={isSuggestionItem ? suggestionItemRef : null}
+                      className={cn(
+                        'flex items-center px-2 py-[6px] w-full cursor-pointer text-sm',
+                        isSuggestionItem ? 'bg-accent' : 'bg-transparent'
+                      )}
+                      onClick={onItemClick}
+                      onMouseEnter={() => setSuggestionItemIndex(index)}
+                    >
+                      <Icon className="mr-1 size-4 shrink-0" />
+                      <span className="truncate">{name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {formatFunctionList.map((funcDataList) => {
+              const { name: listName, list, prevCount, type } = funcDataList;
+              return (
+                <div key={listName}>
+                  <h3 className="py-1 pl-2 text-[13px] font-semibold text-slate-500">{listName}</h3>
+                  {list.map((item, index) => {
+                    const { name: funcName } = item;
+                    const Icon = Type2IconMap[type];
                     const isSuggestionItem =
-                      suggestionItemType === SuggestionItemType.Field && suggestionItemKey === id;
+                      suggestionItemType === SuggestionItemType.Function &&
+                      suggestionItemKey === funcName;
+
                     return (
                       <div
-                        key={id}
+                        key={funcName}
                         ref={isSuggestionItem ? suggestionItemRef : null}
                         className={cn(
                           'flex items-center px-2 py-[6px] w-full cursor-pointer text-sm',
                           isSuggestionItem ? codeBg : 'bg-transparent'
                         )}
                         onClick={onItemClick}
-                        onMouseEnter={() => setSuggestionItemIndex(index)}
+                        onMouseEnter={() =>
+                          setSuggestionItemIndex(filteredFields.length + prevCount + index)
+                        }
                       >
                         <Icon className="mr-1 shrink-0" />
-                        <span className="truncate">{name}</span>
+                        <span className="truncate">{funcName}</span>
                       </div>
                     );
                   })}
                 </div>
-              )}
-              {formatFunctionList.map((funcDataList) => {
-                const { name: listName, list, prevCount, type } = funcDataList;
-                return (
-                  <div key={listName}>
-                    <h3 className="py-1 pl-2 text-[13px] font-semibold text-slate-500">
-                      {listName}
-                    </h3>
-                    {list.map((item, index) => {
-                      const { name: funcName } = item;
-                      const Icon = Type2IconMap[type];
-                      const isSuggestionItem =
-                        suggestionItemType === SuggestionItemType.Function &&
-                        suggestionItemKey === funcName;
-
-                      return (
-                        <div
-                          key={funcName}
-                          ref={isSuggestionItem ? suggestionItemRef : null}
-                          className={cn(
-                            'flex items-center px-2 py-[6px] w-full cursor-pointer text-sm',
-                            isSuggestionItem ? codeBg : 'bg-transparent'
-                          )}
-                          onClick={onItemClick}
-                          onMouseEnter={() =>
-                            setSuggestionItemIndex(filteredFields.length + prevCount + index)
-                          }
-                        >
-                          <Icon className="mr-1 shrink-0" />
-                          <span className="truncate">{funcName}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </>
-          ) : (
-            <div className="pt-2 text-center text-sm">{t('common.search.empty')}</div>
-          )}
-        </div>
-        <FunctionGuide data={functionGuideData} />
+              );
+            })}
+          </>
+        ) : (
+          <div className="pt-2 text-center text-sm">{t('common.search.empty')}</div>
+        )}
       </div>
+      <FunctionGuide data={functionGuideData} />
+    </div>
+  );
+
+  return (
+    <div className="w-[700px]">
+      <div className="flex h-12 w-full items-center justify-between border-b pl-4 pr-2">
+        <h1 className="text-base">{t('editor.formula.title')}</h1>
+      </div>
+
+      <div className={cn('flex w-full flex-col border-b caret-foreground', codeBg)}>
+        <CodeEditor
+          ref={editorRef}
+          value={expressionByName}
+          extensions={extensions}
+          onChange={onValueChange}
+          onSelectionChange={onSelectionChange}
+          placeholder={t('editor.formula.placeholder')}
+        />
+        <div className="h-5 w-full truncate px-2 text-xs text-destructive">{errMsg}</div>
+      </div>
+      <div className="flex h-[52px] w-full items-center justify-between border-b px-2">
+        <div className="mr-2 flex flex-1 flex-col justify-center overflow-hidden">
+          <FunctionHelper funcHelpData={funcHelpData} />
+        </div>
+        <Button size={'sm'} className="ml-2" onClick={onConfirmInner}>
+          {t('common.confirm')}
+        </Button>
+      </div>
+      {enableAI ? (
+        <Tabs defaultValue="normal" className="w-full overflow-auto">
+          <TabsList className="grid w-full grid-cols-2 rounded-none border-b">
+            <TabsTrigger value="normal" className="py-1.5 text-xs">
+              {t('editor.formula.editExpression')}
+            </TabsTrigger>
+            <TabsTrigger value="ai" className="py-1.5 text-xs">
+              {t('editor.formula.generateExpressionByAI')}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="normal" className="mt-0 data-[state=inactive]:hidden" forceMount>
+            {normalContent}
+          </TabsContent>
+          <TabsContent
+            value="ai"
+            className="mt-0 space-y-4 data-[state=inactive]:hidden"
+            forceMount
+          >
+            <AiPromptContainer onApply={onValueChange} />
+          </TabsContent>
+        </Tabs>
+      ) : (
+        normalContent
+      )}
     </div>
   );
 };

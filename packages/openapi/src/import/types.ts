@@ -1,5 +1,5 @@
 import { FieldType, timeZoneStringSchema } from '@teable/core';
-import z from 'zod';
+import { z } from 'zod';
 
 export enum SUPPORTEDTYPE {
   CSV = 'csv',
@@ -7,12 +7,12 @@ export enum SUPPORTEDTYPE {
 }
 
 export const analyzeRoSchema = z.object({
-  attachmentUrl: z.string().url().trim(),
-  fileType: z.nativeEnum(SUPPORTEDTYPE),
+  attachmentUrl: z.string(),
+  fileType: z.enum(SUPPORTEDTYPE),
 });
 
 export const analyzeColumnSchema = z.object({
-  type: z.nativeEnum(FieldType),
+  type: z.enum(FieldType),
   name: z.string(),
 });
 
@@ -57,19 +57,19 @@ export const importOptionSchema = importSheetItem.pick({
 
 export const importOptionRoSchema = z.object({
   worksheets: z.record(z.string(), importSheetItem),
-  attachmentUrl: z.string().url(),
-  fileType: z.nativeEnum(SUPPORTEDTYPE),
+  attachmentUrl: z.string(),
+  fileType: z.enum(SUPPORTEDTYPE),
   notification: z.boolean().optional(),
   tz: timeZoneStringSchema,
 });
 
 export const inplaceImportOptionRoSchema = z.object({
-  attachmentUrl: z.string().url(),
-  fileType: z.nativeEnum(SUPPORTEDTYPE),
+  attachmentUrl: z.string(),
+  fileType: z.enum(SUPPORTEDTYPE),
   insertConfig: z.object({
     sourceWorkSheetKey: z.string(),
     excludeFirstRow: z.boolean(),
-    sourceColumnMap: z.record(z.number().nullable()),
+    sourceColumnMap: z.record(z.string(), z.number().nullable()),
   }),
   notification: z.boolean().optional(),
 });

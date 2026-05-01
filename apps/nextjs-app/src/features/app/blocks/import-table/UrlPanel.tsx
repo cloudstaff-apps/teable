@@ -4,8 +4,8 @@ import type { SUPPORTEDTYPE } from '@teable/openapi';
 import { importTypeMap } from '@teable/openapi';
 import { Input, Button, Spin } from '@teable/ui-lib';
 import type { AxiosResponse } from 'axios';
+import { useTranslation } from 'next-i18next';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
 
 interface IUrlPanel {
@@ -49,7 +49,7 @@ const UrlPanel = (props: IUrlPanel) => {
         <Input
           type="url"
           placeholder={importTypeMap[fileType].exampleUrl}
-          className="mr-2 w-full"
+          className="mr-2"
           value={linkUrl}
           onChange={(e) => {
             const { value } = e.target;

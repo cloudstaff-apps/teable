@@ -1,28 +1,85 @@
 import type { IRecord } from '@teable/core';
-import type { IGetRecordsRo } from '@teable/openapi';
-import { inRange, debounce } from 'lodash';
+import type { IGetRecordsRo, IGroupHeaderRef, IGroupPointsVo } from '@teable/openapi';
+import { inRange, debounce, get } from 'lodash';
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { IGridProps, IRectangle } from '../..';
+import { useSearch } from '../../../hooks';
 import { useRecords } from '../../../hooks/use-records';
-import type { Record } from '../../../model';
+import type { Record as IRecordInstance } from '../../../model';
 
 // eslint-disable-next-line
 export const LOAD_PAGE_SIZE = 300;
 const defaultVisiblePages = { x: 0, y: 0, width: 0, height: 0 };
 
 type IRes = {
+  allGroupHeaderRefs: IGroupHeaderRef[];
+  groupPoints: IGroupPointsVo | null;
+  searchHitIndex?: { fieldId: string; recordId: string }[];
   recordMap: IRecordIndexMap;
   onReset: () => void;
   onForceUpdate: () => void;
+  recordsQuery: IGetRecordsRo;
   onVisibleRegionChanged: NonNullable<IGridProps['onVisibleRegionChanged']>;
 };
 
-export type IRecordIndexMap = { [i: number | string]: Record };
+export type IRecordIndexMap = { [i: number | string]: IRecordInstance };
+
+export type IRecordSearchHitIndexItem = { recordId: string; fieldId: string[] };
+export type IRecordSearchHitIndex = IRecordSearchHitIndexItem[];
+export type IRecordSearchHitIndexMap = Record<string | number, IRecordSearchHitIndexItem>;
+export type ISearchHits = {
+  recordId: string;
+  fieldId: string;
+}[];
+
+const getRecordSearchHitIndex = (extra: unknown) => {
+  const searchHitIndex = get(extra, 'searchHitIndex') as ISearchHits | undefined;
+  if (!searchHitIndex || !searchHitIndex.length) {
+    return [] as IRecordSearchHitIndex;
+  }
+
+  const groupedIndexes = [] as IRecordSearchHitIndex;
+  searchHitIndex.forEach((item) => {
+    const index = groupedIndexes.findIndex((group) => group.recordId === item.recordId);
+    if (index > -1) {
+      groupedIndexes[index] = {
+        recordId: item.recordId,
+        fieldId: [...groupedIndexes[index].fieldId, item.fieldId],
+      };
+    } else {
+      groupedIndexes.push({
+        recordId: item.recordId,
+        fieldId: [item.fieldId],
+      });
+    }
+  });
+  return groupedIndexes;
+};
+
+const getRecordSearchHitIndexMap = (extra: unknown) => {
+  const groupedSearchHitIndex = getRecordSearchHitIndex(extra);
+  return groupedSearchHitIndex.reduce((acc, item, index) => {
+    acc[index] = item;
+    return acc;
+  }, {} as IRecordSearchHitIndexMap);
+};
+
+const getSearchHitIndexFromRecordMap = (
+  groupedSearchHitIndexMap: IRecordSearchHitIndexMap | undefined
+) => {
+  if (!groupedSearchHitIndexMap || Object.values(groupedSearchHitIndexMap).length === 0) {
+    return undefined;
+  }
+  return Object.values(groupedSearchHitIndexMap)
+    .filter((item) => !!item)
+    .flatMap((item) => item.fieldId.map((fieldId) => ({ fieldId, recordId: item.recordId })));
+};
 
 export const useGridAsyncRecords = (
   initRecords?: IRecord[],
   initQuery?: IGetRecordsRo,
-  outerQuery?: Pick<IGetRecordsRo, 'filter' | 'orderBy' | 'groupBy'>
+  outerQuery?: Pick<IGetRecordsRo, 'filter' | 'orderBy' | 'groupBy' | 'collapsedGroupIds'>,
+  initGroupPoints?: IGroupPointsVo
 ): IRes => {
   const [query, setQuery] = useState<IGetRecordsRo>({
     skip: 0,
@@ -32,12 +89,32 @@ export const useGridAsyncRecords = (
   const recordsQuery = useMemo(() => ({ ...query, ...outerQuery }), [query, outerQuery]);
   const queryRef = useRef(query);
   queryRef.current = query;
-  const records = useRecords(recordsQuery, initRecords);
+
+  const { searchQuery } = useSearch();
+  const [searchValue, searchFields] = searchQuery || [];
+  const { records, extra } = useRecords(recordsQuery, initRecords);
   const [loadedRecordMap, setLoadedRecordMap] = useState<IRecordIndexMap>(() =>
     records.reduce((acc, record, i) => {
       acc[i] = record;
       return acc;
     }, {} as IRecordIndexMap)
+  );
+
+  const [loadedRecordSearchHitMap, setLoadedRecordSearchHitMap] = useState<
+    IRecordSearchHitIndexMap | undefined
+  >(() => {
+    return getRecordSearchHitIndexMap(extra);
+  });
+
+  const loadedSearchHitIndex = useMemo<ISearchHits | undefined>(() => {
+    return getSearchHitIndexFromRecordMap(loadedRecordSearchHitMap);
+  }, [loadedRecordSearchHitMap]);
+
+  const [groupPoints, setGroupPoints] = useState<IGroupPointsVo>(
+    () =>
+      (extra == null
+        ? initGroupPoints
+        : (extra as { groupPoints: IGroupPointsVo } | undefined)?.groupPoints) ?? null
   );
   const [visiblePages, setVisiblePages] = useState<IRectangle>(defaultVisiblePages);
   const visiblePagesRef = useRef(visiblePages);
@@ -62,7 +139,36 @@ export const useGridAsyncRecords = (
       }
       return newRecordsState;
     });
-  }, [records]);
+
+    if (get(extra, 'searchHitIndex')) {
+      setLoadedRecordSearchHitMap((preLoadedRecords) => {
+        if (!preLoadedRecords || Object.values(preLoadedRecords).length === 0) {
+          return getRecordSearchHitIndexMap(extra);
+        }
+
+        const indexes = getRecordSearchHitIndex(extra);
+        const cacheLen = take * 2;
+        const [cacheStartIndex, cacheEndIndex] = [
+          Math.max(startIndex - cacheLen / 2, 0),
+          startIndex + indexes.length + cacheLen / 2,
+        ];
+
+        const newRecordsState: Record<string, IRecordSearchHitIndex[number]> = {};
+        for (let i = cacheStartIndex; i < cacheEndIndex; i++) {
+          if (startIndex <= i && i < startIndex + indexes.length) {
+            newRecordsState[i] = indexes[i - startIndex];
+            continue;
+          }
+          newRecordsState[i] = preLoadedRecords[i];
+        }
+        return newRecordsState;
+      });
+    }
+
+    if (extra != null) {
+      setGroupPoints((extra as { groupPoints: IGroupPointsVo } | undefined)?.groupPoints ?? null);
+    }
+  }, [records, extra]);
 
   useEffect(() => onForceUpdate(), [onForceUpdate]);
 
@@ -114,13 +220,23 @@ export const useGridAsyncRecords = (
 
   const onReset = useCallback(() => {
     setLoadedRecordMap({});
+    setLoadedRecordSearchHitMap(undefined);
     setVisiblePages(defaultVisiblePages);
   }, []);
 
+  useEffect(() => {
+    setLoadedRecordSearchHitMap(undefined);
+  }, [searchFields, searchValue]);
+
   return {
+    groupPoints,
+    allGroupHeaderRefs:
+      (extra as { allGroupHeaderRefs: IGroupHeaderRef[] })?.allGroupHeaderRefs ?? null,
     recordMap: loadedRecordMap,
     onVisibleRegionChanged,
+    recordsQuery,
     onForceUpdate,
     onReset,
+    searchHitIndex: loadedSearchHitIndex,
   };
 };

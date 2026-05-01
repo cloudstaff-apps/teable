@@ -5,7 +5,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@teabl
 import { useTranslation } from 'next-i18next';
 import { Actions } from '../components/Actions';
 import { FieldPropertyEditor } from '../components/FieldPropertyEditor';
-import { FieldGraph } from './FieldGraph';
 
 function checkBox(key: string) {
   return {
@@ -32,7 +31,7 @@ export function useDataColumns() {
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                <p>{t('hidden.primaryKey')}</p>
+                <pre>{t('hidden.primaryKey')}</pre>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -74,10 +73,6 @@ export function useDataColumns() {
           </Tooltip>
         </TooltipProvider>
       ),
-    },
-    {
-      header: 'graph',
-      cell: ({ row }) => <FieldGraph fieldId={row.getValue('id')} />,
     },
     {
       accessorKey: 'dbFieldType',

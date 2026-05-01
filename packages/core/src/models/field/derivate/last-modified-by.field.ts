@@ -1,17 +1,42 @@
-import { z } from 'zod';
 import type { FieldType } from '../constant';
+import type { IFieldVisitor } from '../field-visitor.interface';
 import { UserAbstractCore } from './abstract/user.field.abstract';
-
-export const lastModifiedByFieldOptionsSchema = z.object({}).strict();
-
-export type ILastModifiedByFieldOptions = z.infer<typeof lastModifiedByFieldOptionsSchema>;
+import type { IFormulaFieldMeta } from './formula-option.schema';
+import type { ILastModifiedByFieldOptions } from './last-modified-by-option.schema';
+import { lastModifiedByFieldOptionsSchema } from './last-modified-by-option.schema';
 
 export class LastModifiedByFieldCore extends UserAbstractCore {
   type!: FieldType.LastModifiedBy;
   options!: ILastModifiedByFieldOptions;
+  declare meta?: IFormulaFieldMeta;
+
+  override get isStructuredCellValue() {
+    return true;
+  }
 
   convertStringToCellValue(_value: string) {
     return null;
+  }
+
+  getTrackedFieldIds(): string[] {
+    return this.options?.trackedFieldIds ?? [];
+  }
+
+  isTrackAll(): boolean {
+    return this.getTrackedFieldIds().length === 0;
+  }
+
+  shouldUpdate(changedFieldIds: Set<string>): boolean {
+    const trackedFieldIds = this.getTrackedFieldIds();
+    return this.isTrackAll() || trackedFieldIds.some((id) => changedFieldIds.has(id));
+  }
+
+  getIsPersistedAsGeneratedColumn(): boolean {
+    return this.meta?.persistedAsGeneratedColumn === true;
+  }
+
+  shouldPersistAuditValue(): boolean {
+    return !this.isLookup && !this.getIsPersistedAsGeneratedColumn();
   }
 
   repair(_value: unknown) {
@@ -20,5 +45,9 @@ export class LastModifiedByFieldCore extends UserAbstractCore {
 
   validateOptions() {
     return lastModifiedByFieldOptionsSchema.safeParse(this.options);
+  }
+
+  accept<T>(visitor: IFieldVisitor<T>): T {
+    return visitor.visitLastModifiedByField(this);
   }
 }

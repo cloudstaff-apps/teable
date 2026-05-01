@@ -1,4 +1,5 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
+import { getRandomString } from '@teable/core';
 import { clamp } from 'lodash';
 import type { CSSProperties, ForwardRefRenderFunction } from 'react';
 import { useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
@@ -29,11 +30,14 @@ export interface IEditorContainerProps
     | 'scrollToItem'
     | 'real2RowIndex'
     | 'getCellContent'
+    | 'onUndo'
+    | 'onRedo'
     | 'onCopy'
     | 'onPaste'
     | 'onDelete'
     | 'onRowAppend'
     | 'onRowExpand'
+    | 'scrollBy'
   > {
   isEditing?: boolean;
   scrollState: IScrollState;
@@ -54,10 +58,12 @@ export interface IEditorRef<T extends IInnerCell = IInnerCell> {
 
 export interface IEditorProps<T extends IInnerCell = IInnerCell> {
   cell: T;
-  rect: IRectangle;
+  rect: IRectangle & { editorId: string };
   theme: IGridTheme;
   style?: CSSProperties;
   isEditing?: boolean;
+  isScrolling?: boolean;
+  initialSearch?: string;
   setEditing?: React.Dispatch<React.SetStateAction<boolean>>;
   onChange?: (value: unknown) => void;
 }
@@ -82,6 +88,8 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     selection,
     activeCellBound,
     scrollToItem,
+    onUndo,
+    onRedo,
     onCopy,
     onPaste,
     onChange,
@@ -92,8 +100,9 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     setSelection,
     real2RowIndex,
     getCellContent,
+    scrollBy,
   } = props;
-  const { scrollLeft, scrollTop } = scrollState;
+  const { scrollLeft, scrollTop, isScrolling } = scrollState;
   const { rowIndex, realRowIndex, columnIndex } = useMemo(() => {
     const [columnIndex, realRowIndex] = activeCell ?? [-1, -1];
     return {
@@ -106,11 +115,16 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     return getCellContent([columnIndex, realRowIndex]) as IInnerCell;
   }, [columnIndex, realRowIndex, getCellContent]);
   const { type: cellType, readonly, editorWidth } = cellContent;
-  const editingEnable = !readonly && isEditing && activeCell;
+  const enableReadonlyCustomEditor = Boolean(readonly && cellContent.readonlyCustomEditor);
+  const editingEnable = Boolean(
+    (!readonly && isEditing && activeCell) || enableReadonlyCustomEditor
+  );
   const width = editorWidth ?? coordInstance.getColumnWidth(columnIndex);
   const height = activeCellBound?.height ?? coordInstance.getRowHeight(rowIndex);
   const editorRef = useRef<IEditorRef | null>(null);
   const defaultFocusRef = useRef<HTMLInputElement | null>(null);
+  const editorId = useMemo(() => `editor-container-${getRandomString(8)}`, []);
+  const initialSearchRef = useRef<string>('');
 
   useImperativeHandle(ref, () => ({
     focus: () => editorRef.current?.focus?.(),
@@ -126,7 +140,14 @@ export const EditorContainerBase: ForwardRefRenderFunction<
   useEffect(() => {
     if ((cellType as CellType) === CellType.Loading) return;
     if (!activeCell || selection.type === SelectionRegionType.None) return;
-    requestAnimationFrame(() => (editorRef.current || defaultFocusRef.current)?.focus?.());
+
+    initialSearchRef.current = '';
+
+    requestAnimationFrame(() => {
+      // Don't steal focus from dialogs/modals/sheets
+      if (document.activeElement?.closest('[role="dialog"]')) return;
+      (editorRef.current || defaultFocusRef.current)?.focus?.();
+    });
   }, [cellType, activeCell, selection, isEditing]);
 
   useKeyboardSelection({
@@ -135,13 +156,15 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     activeCell,
     selection,
     coordInstance,
-    onCopy,
+    onUndo,
+    onRedo,
     onDelete,
     onRowExpand,
     setEditing,
     setActiveCell,
     setSelection,
     scrollToItem,
+    scrollBy,
   });
 
   const editorStyle = useMemo(
@@ -164,18 +187,21 @@ export const EditorContainerBase: ForwardRefRenderFunction<
       rowInitSize,
       containerHeight - height
     );
+
     return {
       x,
       y,
       width,
       height,
+      editorId,
     };
-  }, [coordInstance, rowIndex, columnIndex, width, height, scrollLeft, scrollTop]);
+  }, [coordInstance, rowIndex, columnIndex, width, height, scrollLeft, scrollTop, editorId]);
 
   const EditorRenderer = useMemo(() => {
-    if (readonly) return null;
+    if (readonly && !enableReadonlyCustomEditor) return null;
 
     const onChangeInner = (value: unknown) => {
+      if (readonly) return;
       onChange?.([columnIndex, realRowIndex], {
         ...cellContent,
         data: value,
@@ -192,8 +218,10 @@ export const EditorContainerBase: ForwardRefRenderFunction<
           style: editorStyle,
           cell: cellContent as IInnerCell,
           isEditing,
+          isScrolling,
           setEditing,
           onChange: onChangeInner,
+          initialSearch: initialSearchRef.current,
         },
         editorRef
       );
@@ -244,6 +272,7 @@ export const EditorContainerBase: ForwardRefRenderFunction<
             cell={cellContent}
             style={editorStyle}
             isEditing={isEditing}
+            initialSearch={initialSearchRef.current}
             setEditing={setEditing}
             onChange={onChangeInner}
           />
@@ -252,16 +281,18 @@ export const EditorContainerBase: ForwardRefRenderFunction<
         return null;
     }
   }, [
-    rect,
-    theme,
     readonly,
-    cellType,
+    enableReadonlyCustomEditor,
     cellContent,
+    cellType,
+    onChange,
     columnIndex,
     realRowIndex,
+    rect,
+    theme,
     editorStyle,
     isEditing,
-    onChange,
+    isScrolling,
     setEditing,
   ]);
 
@@ -269,6 +300,14 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     if (!activeCell || isEditing) return;
     if (!isPrintableKey(event.nativeEvent)) return;
     if (NO_EDITING_CELL_TYPES.has(cellType)) return;
+
+    const key = event.key;
+    if (key && key.length === 1) {
+      initialSearchRef.current = key;
+    } else {
+      initialSearchRef.current = '';
+    }
+
     setEditing(true);
     editorRef.current?.setValue?.(null);
   };
@@ -278,8 +317,16 @@ export const EditorContainerBase: ForwardRefRenderFunction<
     onPaste?.(selection, e);
   };
 
+  const onCopyInner = (e: React.ClipboardEvent) => {
+    if (isEditing || selection.type === SelectionRegionType.None) return;
+    onCopy?.(selection, e);
+  };
+
   return (
-    <div className="click-outside-ignore pointer-events-none absolute left-0 top-0 w-full">
+    <div
+      id={editorId}
+      className="click-outside-ignore pointer-events-none absolute left-0 top-0 w-full"
+    >
       <div
         className="absolute z-10"
         style={{
@@ -290,9 +337,10 @@ export const EditorContainerBase: ForwardRefRenderFunction<
         }}
         onKeyDown={onKeyDown}
         onPaste={onPasteInner}
+        onCopy={onCopyInner}
       >
         {EditorRenderer}
-        <input className="opacity-0" ref={defaultFocusRef} />
+        <input className="size-0 opacity-0" ref={defaultFocusRef} />
       </div>
     </div>
   );

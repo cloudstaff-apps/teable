@@ -8,3 +8,5 @@ export * from './aggregation';
 export * from './session';
 export * from './base';
 export * from './notification';
+export * from './table-permission';
+export * from './pending-upload';

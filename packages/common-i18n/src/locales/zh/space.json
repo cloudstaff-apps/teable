@@ -1,52 +1,210 @@
 {
   "initialSpaceName": "{{name}}的空间",
-  "page": {
-    "title": "Teable App"
-  },
   "action": {
     "createBase": "创建数据库",
     "createSpace": "创建空间",
     "invite": "邀请"
   },
   "allSpaces": "所有空间",
-  "spaceIsEmpty": "当前空间为空",
+  "emptySpaceTitle": "此空间暂无数据库",
+  "spaceIsEmpty": "创建您的第一个数据库开始使用",
   "baseModal": {
     "copy": "副本",
     "duplicate": "复制 \"{{baseName}}\"",
     "createBaseFromTemplate": "从模板创建数据库",
     "duplicateRecords": "复制记录",
-    "duplicateRecordsTip": "您的记录修改历史不会被复制",
+    "duplicateRecordsTip": "您的记录修改历史和协作者不会被复制",
     "toSpace": "选择空间",
     "copyToSpace": "复制到空间",
-    "duplicateBase": "复制数据库",
+    "duplicateBase": "复制",
     "missTargetTip": "请选择要复制到的空间",
     "copying": "复制中，请稍作等待...",
     "copyingTemplate": "从模板创建中，请稍作等待...",
     "howToCreate": "如何创建一个数据库?",
     "fromScratch": "空白数据库",
-    "fromTemplate": "从模板创建"
+    "fromTemplate": "从模板创建",
+    "moveBaseToAnotherSpace": "移动{{baseName}}到另一个空间",
+    "chooseSpace": "选择空间",
+    "duplicateBaseSucceedAndJump": "复制成功，点击前往"
   },
   "spaceSetting": {
-    "title": "空间设置",
+    "title": "设置",
     "general": "概览",
     "collaborators": "协作者",
     "generalDescription": "您可以在此处更改当前空间的设置",
     "collaboratorDescription": "您可以在此处管理空间的协作者并设置他们的权限",
     "spaceName": "空间名称",
-    "spaceId": "空间 ID"
+    "spaceId": "空间 ID",
+    "importBase": "导入"
   },
+  "collaborators": "协作者",
+  "more": "更多",
   "pin": {
     "add": "添加到收藏",
     "remove": "从收藏中移除",
     "pin": "收藏",
     "empty": "您收藏的数据库和空间将显示在这里"
   },
+  "tooltip": {
+    "noPermissionToCreateBase": "您没有权限创建数据库"
+  },
   "tip": {
-    "delete": "确定要删除 \"<0/>\" 空间吗？"
+    "delete": "确定要删除 \"<0/>\" 空间吗？",
+    "title": "提示",
+    "exportTips1": "将当前数据库导出成 .tea 文件，这可能需要一定的时间，你可以在通知中心查看导出结果。",
+    "exportTips2": "你可以在空间 -> 更多 -> 导入，导入 .tea 文件",
+    "exportTips3": "跨数据库关联字段将会被转换成单行文本。",
+    "exportIncludeDataLabel": "包含记录",
+    "exportIncludeDataDescription": "关闭开关时仅导出结构和配置。",
+    "exportTitle": "导出",
+    "exportDescription": "将当前数据库导出成 .tea 文件，这可能需要一定的时间。",
+    "exportStartButton": "开始导出",
+    "exportSlowTip": "数据量较大，导出可能需要较长时间，您可以暂时离开。",
+    "exportReadyDescription": "请下载 .tea 文件，{{importHint}}",
+    "moveBaseSuccessTitle": "移动成功",
+    "moveBaseSuccessDescription": "{{baseName}}已成功移动到{{spaceName}}"
+  },
+  "deleteSpaceModal": {
+    "title": "删除空间",
+    "blockedTitle": "无法删除该空间",
+    "blockedDesc": "该空间存在订阅，请先取消订阅后再删除空间。",
+    "permanentDeleteWarning": "此操作将会永久删除当前空间下的所有资源和数据，请谨慎操作！",
+    "confirmInputLabel": "请输入 DELETE 以确认删除操作"
   },
   "sharedBase": {
-    "title": "共享数据库",
-    "description": "与您共享的数据库将显示在这里",
-    "empty": "暂无共享数据库"
+    "title": "分享给我的",
+    "description": "所有邀请我加入的数据库",
+    "empty": "暂无分享给我的数据库"
+  },
+  "integration": {
+    "title": "集成",
+    "description": "管理空间集成",
+    "addIntegration": "添加集成",
+    "ai": "AI"
+  },
+  "aiSetting": {
+    "title": "AI 配置",
+    "description": "管理空间 AI 配置",
+    "enableTips": "启用空间 AI 配置后, 将会优先使用空间 AI 配置",
+    "enable": "初始化 AI 配置",
+    "enableSwitchTips": "开启前，请配置好高级对话模型"
+  },
+  "import": {
+    "importing": "导入中",
+    "importWayTip": "点击或拖拽文件到此区域上传",
+    "baseImportTips": "点击或者拖拽 .tea 文件到此区域上传",
+    "confirm": "确认并继续",
+    "phase": {
+      "parsingStructure": "正在解析结构",
+      "creatingBase": "正在创建数据库: {{detail}}",
+      "creatingTable": "正在创建表: {{detail}}",
+      "creatingCommonFields": "正在为 {{table}} 创建基础字段：{{fields}}",
+      "creatingButtonFields": "正在为 {{table}} 创建按钮字段：{{fields}}",
+      "creatingFormulaFields": "正在为 {{table}} 创建公式字段：{{fields}}",
+      "creatingLinkFields": "正在为 {{table}} 创建关联字段：{{fields}}",
+      "creatingLookupFields": "正在为 {{table}} 创建引用字段：{{fields}}",
+      "creatingTableViews": "正在为 {{table}} 创建视图：{{fields}}",
+      "creatingPlugins": "正在创建插件",
+      "creatingFolders": "正在创建文件夹",
+      "creatingWorkflows": "正在创建工作流",
+      "creatingApps": "正在创建应用",
+      "creatingAuthorityMatrix": "正在创建权限矩阵",
+      "queuingAttachments": "正在提交附件上传任务",
+      "uploadingAppFiles": "正在上传应用文件",
+      "queuingDataImport": "正在提交数据导入任务",
+      "done": "导入完成",
+      "clickToView": "点击查看"
+    }
+  },
+  "template": {
+    "title": "模板中心",
+    "description": "快速从模板创建一个新数据库",
+    "noTemplatesAvailable": "暂无模板",
+    "noTemplatesDescription": "当前没有可用的模板"
+  },
+  "recentlyBase": {
+    "title": "最近访问"
+  },
+  "noBases": {
+    "title": "Hi {{userName}}！",
+    "description": "创建您的第一个数据库，开始让数据变简单"
+  },
+  "noSpaces": {
+    "title": "Hi {{userName}}！",
+    "description": "创建您的第一个空间，开始您的数据协作之旅"
+  },
+  "baseList": {
+    "allBases": "所有数据库",
+    "owner": "所有者",
+    "createdTime": "创建时间",
+    "lastOpened": "最近打开",
+    "enter": "进入",
+    "noTables": "暂无表",
+    "empty": "暂无数据库",
+    "recent": "最近访问",
+    "manual": "手动排序",
+    "noBasesFound": "未找到数据库"
+  },
+  "publishBase": {
+    "title": "发布到模版中心",
+    "description": "一键发布数据库到模版中心！让更多人看到、使用和 Remix 你的创意，一起构建更强大的业务",
+    "infoTitle": "基本信息",
+    "form": {
+      "title": "作品名称",
+      "description": "描述",
+      "security": "安全",
+      "includeNodes": "包含节点",
+      "advanced": "高级",
+      "publishNode": "发布节点",
+      "includeData": "包含数据",
+      "defaultActiveNode": "默认展示节点",
+      "select": "请选择",
+      "descriptionPlaceholder": "简要描述你的想法...",
+      "titlePlaceholder": "为你的作品命名..."
+    },
+    "publishToCommunity": "发布到模版中心",
+    "publish": "发布",
+    "publishSuccess": "发布成功！",
+    "previewTips": "让世界看到你的作品",
+    "update": "更新",
+    "unPublish": "取消发布",
+    "unPublishSuccess": "取消发布成功！",
+    "unPublishConfirmTitle": "确认取消发布",
+    "unPublishConfirmDescription": "确定要取消发布此数据库吗？取消发布后，该数据库将不再在模版中心显示。",
+    "usageCount": "使用次数：",
+    "uploadCover": "点击上传封面图片",
+    "changeCover": "点击更换封面",
+    "uploading": "图片上传中...",
+    "uploadSuccess": "图片上传成功",
+    "uploadFailed": "上传失败",
+    "invalidImageType": "请选择图片文件",
+    "tips": {
+      "publishValidation": "标题和描述不能为空",
+      "atLeastOneNode": "至少选择一个节点发布"
+    },
+    "urlCopied": "链接已复制到剪贴板！",
+    "urlCopiedForDiscord": "链接已复制到剪贴板！你可以在 Discord 中粘贴。",
+    "featuredLabel": "精选",
+    "unfeaturedLabel": "未精选",
+    "featuredTip": "已入选官方精选，将获得更多曝光与推荐。",
+    "unfeaturedTip": "暂未入选官方精选，持续打磨与更新，有机会获得推荐，让更多人看到你的作品。",
+    "publishSuccessDescription": "分享你的作品到世界",
+    "shareWith": "分享到",
+    "unpublishedApps": {
+      "title": "检测到未发布的应用",
+      "description": "未发布的应用可能导致模板预览失败，建议先发布后继续。",
+      "publishAll": "全部发布",
+      "publish": "发布",
+      "published": "已发布",
+      "publishing": "发布中",
+      "notPublished": "未发布",
+      "publishFailed": "发布失败",
+      "publishFailedTip1": "检查源应用是否能正常发布",
+      "publishFailedTip2": "尝试重新发布此模板",
+      "ignoreAndContinue": "忽略并继续",
+      "goToFix": "去修复",
+      "redeploy": "重新部署",
+      "unnamedApp": "未命名应用"
+    }
   }
 }

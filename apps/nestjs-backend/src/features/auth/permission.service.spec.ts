@@ -1,6 +1,6 @@
 /* eslint-disable sonarjs/no-duplicate-string */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import type { Action } from '@teable/core';
@@ -10,7 +10,10 @@ import { noop } from 'lodash';
 import { ClsService } from 'nestjs-cls';
 import type { DeepMockProxy } from 'vitest-mock-extended';
 import { mockDeep, mockReset } from 'vitest-mock-extended';
+import { getError } from '../../../test/utils/get-error';
+import { GlobalModule } from '../../global/global.module';
 import type { IClsStore } from '../../types/cls';
+import { PermissionModule } from './permission.module';
 import { PermissionService } from './permission.service';
 
 describe('PermissionService', () => {
@@ -23,7 +26,7 @@ describe('PermissionService', () => {
     clsServiceMock = mockDeep<ClsService<IClsStore>>();
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PermissionService, PrismaService, ClsService],
+      imports: [GlobalModule, PermissionModule],
     })
       .overrideProvider(PrismaService)
       .useValue(prismaServiceMock)
@@ -43,17 +46,18 @@ describe('PermissionService', () => {
     it('should return a SpaceRole', async () => {
       const spaceId = 'space-id';
       const roleName = 'space-role';
-      prismaServiceMock.collaborator.findFirst.mockResolvedValue({ roleName } as any);
+      prismaServiceMock.collaborator.findMany.mockResolvedValue([{ roleName } as any]);
+      prismaServiceMock.space.findFirst.mockResolvedValue({ deletedTime: null } as any);
       const result = await service['getRoleBySpaceId'](spaceId);
       expect(result).toBe(roleName);
     });
 
     it('should throw a ForbiddenException if collaborator is not found', async () => {
-      const spaceId = 'space-id';
-      prismaServiceMock.collaborator.findFirst.mockResolvedValue(null);
-      await expect(service['getRoleBySpaceId'](spaceId)).rejects.toThrowError(
-        new ForbiddenException(`can't find collaborator`)
-      );
+      const spaceId = 'space-id1';
+      prismaServiceMock.collaborator.findMany.mockResolvedValue([]);
+      prismaServiceMock.space.findFirst.mockResolvedValue({ deletedTime: null } as any);
+      const res = await service['getRoleBySpaceId'](spaceId);
+      expect(res).toBeNull();
     });
   });
 
@@ -61,14 +65,14 @@ describe('PermissionService', () => {
     it('should return a BaseRole', async () => {
       const baseId = 'base-id';
       const roleName = 'base-role';
-      prismaServiceMock.collaborator.findFirst.mockResolvedValue({ roleName } as any);
+      prismaServiceMock.collaborator.findMany.mockResolvedValue([{ roleName } as any]);
       const result = await service['getRoleByBaseId'](baseId);
       expect(result).toBe(roleName);
     });
 
     it('should return null if collaborator is not found', async () => {
-      const baseId = 'base-id';
-      prismaServiceMock.collaborator.findFirst.mockResolvedValue(null);
+      const baseId = 'base-id1';
+      prismaServiceMock.collaborator.findMany.mockResolvedValue([]);
       const result = await service['getRoleByBaseId'](baseId);
       expect(result).toBeNull();
     });
@@ -79,28 +83,31 @@ describe('PermissionService', () => {
       const resourceId = 'spcxxxxxxxx';
       vi.spyOn(service as any, 'getPermissionBySpaceId').mockImplementation(noop);
       await service.getPermissionsByResourceId(resourceId);
-      expect(service['getPermissionBySpaceId']).toHaveBeenCalledWith(resourceId);
+      expect(service['getPermissionBySpaceId']).toHaveBeenCalledWith(resourceId, undefined);
     });
 
     it('should return permissions for a base resource', async () => {
       const resourceId = 'bsexxxxxx';
       vi.spyOn(service as any, 'getPermissionByBaseId').mockImplementation(noop);
       await service.getPermissionsByResourceId(resourceId);
-      expect(service['getPermissionByBaseId']).toHaveBeenCalledWith(resourceId);
+      expect(service['getPermissionByBaseId']).toHaveBeenCalledWith(resourceId, undefined);
     });
 
     it('should return permissions for a table resource', async () => {
       const resourceId = 'tblxxxxxxx';
       vi.spyOn(service as any, 'getPermissionByTableId').mockImplementation(noop);
       await service.getPermissionsByResourceId(resourceId);
-      expect(service['getPermissionByTableId']).toHaveBeenCalledWith(resourceId);
+      expect(service['getPermissionByTableId']).toHaveBeenCalledWith(resourceId, undefined);
     });
 
     it('should throw an error if resource is not found', async () => {
       const resourceId = 'invalid-id';
-      await expect(service.getPermissionsByResourceId(resourceId)).rejects.toThrowError(
-        new ForbiddenException('request path is not valid')
+      const error = await getError(
+        async () => await service.getPermissionsByResourceId(resourceId)
       );
+      expect(error).toBeDefined();
+      expect(error?.status).toBe(403);
+      expect(error?.message).toBe('Request path is not valid');
     });
   });
 
@@ -119,7 +126,10 @@ describe('PermissionService', () => {
 
       prismaServiceMock.base.findFirst.mockResolvedValueOnce(null);
 
-      await expect(service['getUpperIdByBaseId'](baseId)).rejects.toThrowError(NotFoundException);
+      const error = await getError(async () => await service['getUpperIdByBaseId'](baseId));
+      expect(error).toBeDefined();
+      expect(error?.status).toBe(404);
+      expect(error?.message).toBe('Base not found');
     });
   });
 
@@ -225,6 +235,7 @@ describe('PermissionService', () => {
         scopes,
         spaceIds,
         baseIds: undefined,
+        hasFullAccess: undefined,
       });
 
       const result = await service.getPermissionsByAccessToken(resourceId, accessTokenId);
@@ -241,11 +252,14 @@ describe('PermissionService', () => {
         scopes: ['table|update'],
         spaceIds,
         baseIds: undefined,
+        hasFullAccess: undefined,
       });
 
-      await expect(
-        service.getPermissionsByAccessToken(resourceId, accessTokenId)
-      ).rejects.toThrowError(ForbiddenException);
+      const error = await getError(
+        async () => await service.getPermissionsByAccessToken(resourceId, accessTokenId)
+      );
+      expect(error).toBeDefined();
+      expect(error?.status).toBe(403);
     });
 
     it('should throw ForbiddenException when resourceId is a valid baseId but not allowed', async () => {
@@ -257,13 +271,16 @@ describe('PermissionService', () => {
         scopes: ['table|read'],
         baseIds,
         spaceIds: undefined,
+        hasFullAccess: undefined,
       });
 
       vi.spyOn(service as any, 'isBaseIdAllowedForResource').mockResolvedValueOnce(false);
 
-      await expect(
-        service.getPermissionsByAccessToken(resourceId, accessTokenId)
-      ).rejects.toThrowError(ForbiddenException);
+      const error = await getError(
+        async () => await service.getPermissionsByAccessToken(resourceId, accessTokenId)
+      );
+      expect(error).toBeDefined();
+      expect(error?.status).toBe(403);
     });
 
     it('should throw ForbiddenException when resourceId is a valid tableId but not allowed', async () => {
@@ -278,9 +295,11 @@ describe('PermissionService', () => {
         baseIds,
       });
 
-      await expect(
-        service.getPermissionsByAccessToken(resourceId, accessTokenId)
-      ).rejects.toThrowError(ForbiddenException);
+      const error = await getError(
+        async () => await service.getPermissionsByAccessToken(resourceId, accessTokenId)
+      );
+      expect(error).toBeDefined();
+      expect(error?.status).toBe(403);
     });
   });
 
@@ -323,8 +342,8 @@ describe('PermissionService', () => {
     it('should throw an error if user does not have all required permissions', async () => {
       vi.spyOn(service, 'getPermissions').mockResolvedValue(getPermissions(Role.Editor));
       const resourceId = 'bsexxxxxx';
-      await expect(service.validPermissions(resourceId, ['space|create'])).rejects.toThrowError(
-        new ForbiddenException(`not allowed to operate space|create on ${resourceId}`)
+      await expect(service.validPermissions(resourceId, ['space|create'])).rejects.toThrow(
+        `not allowed to operate space|create on ${resourceId}`
       );
     });
   });

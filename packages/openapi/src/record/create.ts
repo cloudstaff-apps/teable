@@ -1,7 +1,7 @@
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { recordSchema } from '@teable/core';
-import type { AxiosResponse, Axios } from 'axios';
-import { axios as axiosInstance } from '../axios';
+import type { AxiosResponse } from 'axios';
+import { axios } from '../axios';
 import { registerRoute, urlBuilder } from '../utils';
 import { z } from '../zod';
 import { fieldKeyTypeRoSchema, typecastSchema } from './get';
@@ -9,17 +9,25 @@ import { recordsVoSchema } from './get-list';
 
 export const recordInsertOrderRoSchema = z
   .object({
-    viewId: z.string().openapi({
-      description:
-        'You can only specify order in one view when create record, other views appear last by default',
-    }),
-    anchorId: z.string().openapi({
-      description: 'The record id to anchor to',
-    }),
+    viewId: z
+      .string()
+      .meta({
+        description:
+          'You can only specify order in one view when create record (will create a order index automatically)',
+      })
+      .describe(
+        'You can only specify order in one view when create record (will create a order index automatically)'
+      ),
+    anchorId: z
+      .string()
+      .meta({
+        description: 'The record id to anchor to',
+      })
+      .describe('The record id to anchor to'),
     position: z.enum(['before', 'after']),
   })
-  .openapi({
-    description: 'Where this record to insert to',
+  .meta({
+    description: 'Where this record to insert to (Optional)',
   });
 
 export type IRecordInsertOrderRo = z.infer<typeof recordInsertOrderRoSchema>;
@@ -34,7 +42,7 @@ export const createRecordsRoSchema = z
         fields: recordSchema.shape.fields,
       })
       .array()
-      .openapi({
+      .meta({
         example: [
           {
             fields: {
@@ -45,15 +53,13 @@ export const createRecordsRoSchema = z
         description: 'Array of record objects ',
       }),
   })
-  .openapi({
+  .meta({
     description: 'Multiple Create records',
   });
 
 export type ICreateRecordsRo = z.infer<typeof createRecordsRoSchema>;
 
-export const createRecordsVoSchema = recordsVoSchema.omit({
-  offset: true,
-});
+export const createRecordsVoSchema = recordsVoSchema.pick({ records: true });
 
 export type ICreateRecordsVo = z.infer<typeof createRecordsVoSchema>;
 
@@ -62,7 +68,9 @@ export const CREATE_RECORD = '/table/{tableId}/record';
 export const CreateRecordRoute: RouteConfig = registerRoute({
   method: 'post',
   path: CREATE_RECORD,
-  description: 'Create multiple records',
+  summary: 'Create records',
+  description:
+    'Create one or multiple records with support for field value typecast and custom record ordering.',
   request: {
     params: z.object({
       tableId: z.string(),
@@ -91,33 +99,6 @@ export const CreateRecordRoute: RouteConfig = registerRoute({
 export async function createRecords(
   tableId: string,
   recordsRo: ICreateRecordsRo
-): Promise<AxiosResponse<ICreateRecordsVo>>;
-export async function createRecords(
-  axios: Axios,
-  tableId: string,
-  recordsRo: ICreateRecordsRo
-): Promise<AxiosResponse<ICreateRecordsVo>>;
-export async function createRecords(
-  axios: Axios | string,
-  tableId: string | ICreateRecordsRo,
-  recordsRo?: ICreateRecordsRo
 ): Promise<AxiosResponse<ICreateRecordsVo>> {
-  let theAxios: Axios;
-  let theTableId: string;
-  let theRecordsRo: ICreateRecordsRo;
-
-  if (typeof axios === 'string') {
-    theAxios = axiosInstance;
-    theTableId = axios;
-    theRecordsRo = tableId as ICreateRecordsRo;
-  } else {
-    theAxios = axios;
-    theTableId = tableId as string;
-    theRecordsRo = recordsRo as ICreateRecordsRo;
-  }
-
-  return theAxios.post<ICreateRecordsVo>(
-    urlBuilder(CREATE_RECORD, { tableId: theTableId }),
-    theRecordsRo
-  );
+  return axios.post<ICreateRecordsVo>(urlBuilder(CREATE_RECORD, { tableId }), recordsRo);
 }

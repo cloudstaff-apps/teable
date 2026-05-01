@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { UserPlus } from '@teable/icons';
-import { getSpaceById } from '@teable/openapi';
+import { getSpaceById, getSpaceCollaboratorList } from '@teable/openapi';
 import { ReactQueryKeys } from '@teable/sdk/config';
 import { useIsHydrated } from '@teable/sdk/hooks';
 import { Button } from '@teable/ui-lib/shadcn';
 import { useRouter } from 'next/router';
-import { useTranslation } from 'next-i18next';
+import { Trans, useTranslation } from 'next-i18next';
+import { InviteSpacePopover } from '@/features/app/components/collaborator/space/InviteSpacePopover';
 import { Collaborators } from '@/features/app/components/collaborator-manage/space/Collaborators';
-import { SpaceCollaboratorModalTrigger } from '@/features/app/components/collaborator-manage/space/SpaceCollaboratorModalTrigger';
+import { SpaceSettingContainer } from '@/features/app/components/SpaceSettingContainer';
 import { spaceConfig } from '@/features/i18n/space.config';
 
 export const CollaboratorPage = () => {
@@ -21,28 +22,40 @@ export const CollaboratorPage = () => {
     queryFn: ({ queryKey }) => getSpaceById(queryKey[1]).then((res) => res.data),
   });
 
-  return (
-    <div className="h-screen w-full overflow-y-auto overflow-x-hidden">
-      <div className="w-full px-8 py-6">
-        <div className="border-b pb-4">
-          <h1 className="text-3xl font-semibold">{t('space:spaceSetting.collaborators')}</h1>
-          <div className="mt-3 text-sm text-slate-500">
-            {t('space:spaceSetting.collaboratorDescription')}
-          </div>
-        </div>
+  const { data: collaborators } = useQuery({
+    queryKey: ReactQueryKeys.spaceCollaboratorList(spaceId, { includeBase: true }),
+    queryFn: ({ queryKey }) =>
+      getSpaceCollaboratorList(queryKey[1], { includeBase: true }).then((res) => res.data),
+  });
 
-        {isHydrated && !!space && (
-          <div className="w-full py-4">
-            <Collaborators spaceId={spaceId} role={space.role}>
-              <SpaceCollaboratorModalTrigger space={space}>
-                <Button size="sm">
-                  <UserPlus className="size-4" /> {t('space:action.invite')}
-                </Button>
-              </SpaceCollaboratorModalTrigger>
-            </Collaborators>
-          </div>
-        )}
-      </div>
-    </div>
+  return (
+    <SpaceSettingContainer
+      title={t('space:spaceSetting.collaborators')}
+      description={
+        <Trans
+          ns="common"
+          i18nKey={'invite.dialog.desc'}
+          count={collaborators?.uniqTotal}
+          components={{ b: <b /> }}
+        />
+      }
+      className="overflow-hidden"
+    >
+      {isHydrated && !!space && (
+        <div className="size-full">
+          <Collaborators
+            spaceId={spaceId}
+            role={space.role}
+            collaboratorQuery={{ includeBase: true }}
+          >
+            <InviteSpacePopover space={space}>
+              <Button size="sm">
+                <UserPlus className="size-4" /> {t('space:action.invite')}
+              </Button>
+            </InviteSpacePopover>
+          </Collaborators>
+        </div>
+      )}
+    </SpaceSettingContainer>
   );
 };

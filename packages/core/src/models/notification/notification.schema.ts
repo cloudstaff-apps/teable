@@ -21,6 +21,8 @@ export const tableRecordUrlSchema = z.object({
   baseId: z.string().startsWith(IdPrefix.Base),
   tableId: z.string().startsWith(IdPrefix.Table),
   recordId: z.string().startsWith(IdPrefix.Record).optional(),
+  commentId: z.string().startsWith(IdPrefix.Comment).optional(),
+  downloadUrl: z.string().optional(),
 });
 
 export const notificationUrlSchema = tableRecordUrlSchema.optional();
@@ -29,9 +31,10 @@ export type INotificationUrl = z.infer<typeof notificationUrlSchema>;
 export const notificationSchema = z.object({
   id: z.string().startsWith(IdPrefix.Notification),
   notifyIcon: notificationIconSchema,
-  notifyType: z.nativeEnum(NotificationTypeEnum),
+  notifyType: z.enum(NotificationTypeEnum),
   url: z.string(),
   message: z.string(),
+  messageI18n: z.string().nullable().optional(),
   isRead: z.boolean(),
   createdTime: z.string(),
 });

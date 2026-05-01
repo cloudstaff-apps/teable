@@ -2,15 +2,15 @@ import type {
   ISelectFieldOptions,
   ISingleSelectCellValue,
   IMultipleSelectCellValue,
-  ISelectFieldChoice,
 } from '@teable/core';
 import { FieldType, ColorUtils } from '@teable/core';
+import { temporaryPaste } from '@teable/openapi';
 import type { ForwardRefRenderFunction } from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import colors from 'tailwindcss/colors';
+import { useTranslation } from '../../../context/app/i18n';
 import { useTableId } from '../../../hooks';
 import type { MultipleSelectField, SingleSelectField } from '../../../model';
-import { Field } from '../../../model';
 import { SelectEditorMain } from '../../editor';
 import type { IEditorRef } from '../../editor/type';
 import type { IEditorProps } from '../../grid/components';
@@ -21,7 +21,8 @@ const GridSelectEditorBase: ForwardRefRenderFunction<
   IEditorRef<string | string[] | undefined>,
   IWrapperEditorProps & IEditorProps
 > = (props, ref) => {
-  const { field, record, rect, style, isEditing, setEditing } = props;
+  const { field, record, rect, style, isEditing, initialSearch, setEditing } = props;
+  const { t } = useTranslation();
   const tableId = useTableId();
   const defaultFocusRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<IEditorRef<string | string[] | undefined>>(null);
@@ -64,7 +65,7 @@ const GridSelectEditorBase: ForwardRefRenderFunction<
   }, [options, displayChoiceMap]);
 
   const onChange = (value?: string[] | string) => {
-    record.updateCell(fieldId, isMultiple && value?.length === 0 ? null : value);
+    record.updateCell(fieldId, isMultiple && value?.length === 0 ? null : value, { t });
     if (!isMultiple) setTimeout(() => setEditing?.(false));
   };
 
@@ -72,21 +73,16 @@ const GridSelectEditorBase: ForwardRefRenderFunction<
     async (name: string) => {
       if (!tableId) return;
 
-      const { choices = [] } = options as ISelectFieldOptions;
-      const existColors = choices.map((v) => v.color);
-      const choice = {
-        name,
-        color: ColorUtils.randomColor(existColors)[0],
-      } as ISelectFieldChoice;
-
-      const newChoices = [...choices, choice];
-
-      await Field.convertField(tableId, fieldId, {
-        type: fieldType,
-        options: { ...options, choices: newChoices },
+      await temporaryPaste(tableId, {
+        content: name,
+        projection: [fieldId],
+        ranges: [
+          [0, 0],
+          [0, 0],
+        ],
       });
     },
-    [tableId, fieldType, fieldId, options]
+    [tableId, fieldId]
   );
 
   return (
@@ -102,7 +98,9 @@ const GridSelectEditorBase: ForwardRefRenderFunction<
           className="absolute rounded-sm border p-2 shadow-sm"
           value={cellValue === null ? undefined : cellValue}
           isMultiple={isMultiple}
+          preventAutoNewOptions={(options as ISelectFieldOptions)?.preventAutoNewOptions}
           options={selectOptions}
+          initialSearch={initialSearch}
           onChange={onChange}
           onOptionAdd={onOptionAdd}
         />
